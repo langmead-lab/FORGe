@@ -1,0 +1,296 @@
+---
+title: "vis_eval"
+author: "Ben Langmead & Jacob Pritt"
+date: "10/23/2016"
+output: html_document
+---
+
+## Summary
+
+We evaluate the output of a series of experiments using HISAT2 to align simulated reads to various human chromosome 1 graph genome representations.
+
+#### Libraries
+
+```{r load_libraries}
+library(dplyr)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+```
+
+#### Helper functions
+
+```{r grid_arrange_shared}
+# Borrowed from: https://rpubs.com/sjackman/grid_arrange_shared_legend
+# Thanks to Shaun Jackman
+grid_arrange_shared_legend <- function(...) {
+    plots <- list(...)
+    g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
+    legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
+    lheight <- sum(legend$height)
+    grid.arrange(
+        do.call(arrangeGrob, lapply(plots, function(x)
+            x + theme(legend.position="none"))),
+        legend,
+        ncol = 1,
+        heights = unit.c(unit(1, "npc") - lheight, lheight))
+}
+```
+
+#### Read tables
+
+Given SAM files produced by Jacob's scripts, we use the following scripts to generate `csv` files that summarize how the correct and incorrect alignments fall with respect to various genomic compartments:
+
+* `src/correctness/rep.py`
+* `src/correctness/correctness.py`
+
+And these are the driver scripts that allow these annotations to be compiled for all the various SAM files, with results placed in a parallel directory structure:
+
+* `src/correctness/annotate_sam.sh`
+* `src/correctness/recursive_hhpc_annotate.sh`
+
+Right now we are just investigating repeats (broken down by family/subfamily) and the exome.
+
+```{r pressure, echo=FALSE}
+m <- read.table('overall.csv', header=F, sep=',')
+colnames(m) <- c('hap', 'samp', 'rank', 'pct', 'rep', 'exome', 'class', 'count')
+m0 <- m[m$class == 0,]
+m1 <- m[m$class == 1,]
+mu <- m[m$class == -1,]
+mp <- m0 %>% full_join(m1, by=c("hap", "samp", "rank", "pct", "rep", "exome"))
+mp <- mp %>% full_join(mu, by=c("hap", "samp", "rank", "pct", "rep", "exome"))
+mp$class.x <- NULL
+mp$class.y <- NULL
+mp$class <- NULL
+colnames(mp) <- c('hap', 'samp', 'rank', 'pct', 'rep', 'exome', 'inc', 'cor', 'unal')
+mp$inc[is.na(mp$inc)] <- 0
+mp$cor[is.na(mp$cor)] <- 0
+mp$unal[is.na(mp$unal)] <- 0
+```
+
+```{r}
+good_ranks <- c('approx_err', 'blowup', 'fnr', 'fpr')
+```
+
+#### Sanity check
+
+This is a good way to quickly check if anything is missing:
+
+```{r}
+mtmp <- mp %>%
+  filter(!is.na(pct)) %>%
+  filter(rank %in% good_ranks) %>%
+  group_by(samp, hap, rank, pct) %>%
+  summarise(mean=sum(cor)/sum(cor+inc+unal))
+
+table(mtmp$samp, mtmp$hap, mtmp$pct, mtmp$rank)
+```
+
+#### Plots by sample/haplotype
+
+Overall correctness:
+
+```{r}
+group_by_samphap <- function(m, want_rank, denom_all=F) {
+  m %>%
+    filter(!is.na(pct)) %>%
+    filter(rank == want_rank) %>%
+    filter(rank %in% good_ranks) %>%
+    group_by(samp, hap, pct) %>%
+    summarise(mean=sum(cor)/sum(cor+inc+(if(denom_all) unal else 0)))
+}
+
+group_by_auto_hap <- function(m, denom_all=F) {
+  m %>%
+    filter(rank == 'auto_haps') %>%
+    group_by(samp, hap, pct) %>%
+    summarise(mean=sum(cor)/sum(cor+inc+(if(denom_all) unal else 0)))
+}
+
+plot_by_samphap <- function(m, want_rank, title='') {
+  mptmp <- group_by_samphap(m, want_rank)
+  #mpauto <- group_by_auto_hap(m)
+  ggplot() +
+    geom_line(data=mptmp, aes(x=pct, y=mean, color=factor(samp), linetype=factor(hap))) +
+    #geom_abline(data=mpauto, aes(slope=0, intercept=mean, color=factor(samp), linetype=factor(hap))) +
+    scale_x_continuous(limits=c(0, 100)) +
+    theme_bw() +
+    labs(x="% variants included", y="Correctness") +
+    scale_linetype_discrete("Haplotype") +
+    scale_colour_discrete("Outgroup\nsample") +
+    ggtitle(title)
+}
+```
+
+One issue with the following is they don't have a point at 0%.
+
+##### Approximate error
+
+```{r approx_err_plot}
+pdf(file="ae_all.pdf", onefile=F)
+ae_all <- plot_by_samphap(mp, 'approx_err', title='All')
+ae_all
+dev.off()
+```
+
+```{r approx_err_rep_plot}
+pdf(file="ae_rep.pdf", onefile=F)
+ae_all_rep <- plot_by_samphap(mp %>% filter(rep != 'None'), 'approx_err', title='Repeats')
+ae_all_rep
+dev.off()
+```
+
+```{r approx_err_alu_plot}
+pdf(file="ae_alu.pdf", onefile=F)
+ae_alu <- plot_by_samphap(mp %>% filter(rep == 'SINE/Alu'), 'approx_err', title='Alu repeats')
+ae_alu
+dev.off()
+```
+
+```{r approx_err_exome_plot}
+pdf(file="ae_exome.pdf", onefile=F)
+ae_exome <- plot_by_samphap(mp %>% filter(exome != 'None'), 'approx_err', title='Exome')
+ae_exome
+dev.off()
+```
+
+```{r approx_err_four_panel}
+pdf(file="ae_four_panel.pdf", onefile=F)
+grid_arrange_shared_legend(ae_all, ae_all_rep, ae_alu, ae_exome)
+dev.off()
+```
+
+#
+# FPR
+#
+
+```{r fpr_plot}
+pdf(file="fpr_all.pdf", onefile=F)
+fpr_all <- plot_by_samphap(mp, 'fpr', title='All')
+fpr_all
+dev.off()
+```
+
+```{r fpr_rep_plot}
+pdf(file="fpr_rep.pdf", onefile=F)
+fpr_all_rep <- plot_by_samphap(mp %>% filter(rep != 'None'), 'fpr', title='Repeats')
+fpr_all_rep
+dev.off()
+```
+
+```{r fpr_alu_plot}
+pdf(file="fpr_alu.pdf", onefile=F)
+fpr_alu <- plot_by_samphap(mp %>% filter(rep == 'SINE/Alu'), 'fpr', title='Alu repeats')
+fpr_alu
+dev.off()
+```
+
+```{r fpr_exome_plot}
+pdf(file="fpr_exome.pdf", onefile=F)
+fpr_exome <- plot_by_samphap(mp %>% filter(exome != 'None'), 'fpr', title='Exome')
+fpr_exome
+dev.off()
+```
+
+```{r}
+pdf(file="fpr_four_panel.pdf", onefile=F)
+grid_arrange_shared_legend(fpr_all, fpr_all_rep, fpr_alu, fpr_exome)
+dev.off()
+```
+
+#
+# FNR
+#
+
+```{r fnr_plot}
+pdf(file="fnr_all.pdf", onefile=F)
+fnr_all <- plot_by_samphap(mp, 'fnr', 'All')
+fnr_all
+dev.off()
+```
+
+```{r fnr_rep_plot}
+pdf(file="fnr_rep.pdf", onefile=F)
+fnr_all_rep <- plot_by_samphap(mp %>% filter(rep != 'None'), 'fnr', 'Repeats')
+fnr_all_rep
+dev.off()
+```
+
+```{r fnr_alu_plot}
+pdf(file="fnr_alu.pdf", onefile=F)
+fnr_alu <- plot_by_samphap(mp %>% filter(rep == 'SINE/Alu'), 'fnr', 'Alu repeats')
+fnr_alu
+dev.off()
+```
+
+```{r fnr_exome_plot}
+pdf(file="fnr_exome.pdf", onefile=F)
+fnr_exome <- plot_by_samphap(mp %>% filter(exome != 'None'), 'fnr', 'Exome')
+fnr_exome
+dev.off()
+```
+
+```{r}
+pdf(file="fnr_four_panel.pdf", onefile=F)
+grid_arrange_shared_legend(fnr_all, fnr_all_rep, fnr_alu, fnr_exome)
+dev.off()
+```
+
+#### Plots by ranking method
+
+```{r}
+group_by_rank <- function(m, denom_all=F) {
+  m %>%
+    filter(!is.na(pct)) %>%
+    filter(rank %in% good_ranks) %>%
+    group_by(rank, pct) %>%
+    summarise(mean=sum(cor)/sum(cor+inc+(if(denom_all) unal else 0)))
+}
+
+plot_by_rank <- function(m, title='') {
+  mptmp <- group_by_rank(m)
+  mptmp$rank <- factor(mptmp$rank, labels=c('Approx error', 'Blowup', 'FNR', 'FPR'))
+  ggplot(mptmp, aes(x=pct, y=mean,
+                    color=factor(rank))) +
+    geom_line() +
+    geom_point() +
+    theme_bw() +
+    labs(x="% variants included", y="Correctness") +
+    scale_colour_discrete("Ranking") +
+    ggtitle(title)
+}
+```
+
+```{r by_rank_all_plot}
+pdf(file="rank_all.pdf", onefile=F)
+rank_all <- plot_by_rank(mp, title='All')
+rank_all
+dev.off()
+```
+
+```{r by_rank_rep_plot}
+pdf(file="rank_rep.pdf", onefile=F)
+rank_all_rep <- plot_by_rank(mp %>% filter(rep != 'None'), title='Repeats')
+rank_all_rep
+dev.off()
+```
+
+```{r by_rank_alu_plot}
+pdf(file="rank_alu.pdf", onefile=F)
+rank_alu_rep <- plot_by_rank(mp %>% filter(rep == 'SINE/Alu'), title='Alu repeats')
+rank_alu_rep
+dev.off()
+```
+
+```{r by_rank_exome_plot}
+pdf(file="rank_exome.pdf", onefile=F)
+rank_exome <- plot_by_rank(mp %>% filter(exome != 'None'), title='Exome')
+rank_exome
+dev.off()
+```
+
+```{r}
+pdf(file="rank_four_panel.pdf", onefile=F)
+grid_arrange_shared_legend(rank_all, rank_all_rep, rank_alu, rank_exome)
+dev.off()
+```
