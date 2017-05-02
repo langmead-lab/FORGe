@@ -7,7 +7,6 @@ Rank a set of variants for inclusion in a graph genome, from highest to lowest p
 import sys
 import argparse
 import jellyfish
-import read_iterator
 import io
 import variant
 from util import *
@@ -33,12 +32,13 @@ class VarRanker:
         self.h_ref = None
         self.h_added = None
 
-    def ambiguity(self, var_id):
-
-
     def avg_read_prob(self):
+        if self.wgt_ref and self.wgt_added:
+            return
+
         # Average probability (weighted by genome length) of a specific read from the linear genome being chosen 
-        total_prob_linear = sum([len(s) for s in self.chrom_lens.values()])
+        total_prob_ref = sum([len(s) for s in self.chrom_lens.values()])
+        count_ref = 0
 
         # Average probability (weighted by genome length) of a specific read from the added pseudocontigs being chosen 
         total_prob_added = 0
@@ -50,6 +50,7 @@ class VarRanker:
         var_i = 0
         amb = 0.0
         for chrom, seq in self.genomes.items():
+            count_ref += len(seq) - self.r + 1
             for i in range(self.chrom_lens[chrom] - r + 1):
                 read = seq[i:i+self.r]
                 if 'N' in read or 'M' in read or 'R' in read:
@@ -65,14 +66,26 @@ class VarRanker:
 
                 if num_vars == 0:
                     continue
-                else:
-                    counts = [self.vars[id].num_alts for id in range(var_i,var_j)]
-                    vec = io.get_next_vector(num_vars, counts, None)
-                    while vec:
-                        new_read = list(read)
-                        for v in range(num_vars):
-                            if vec[v] > 0:
-                                new_read = list() + self.vars[var_i+v].alts[vec[v]-1] + list()
+
+                counts = [self.vars[id].num_alts for id in range(var_i,var_j)]
+                vec = get_next_vector(num_vars, counts, [0]*num_vars)
+                while vec:
+                    new_read = list(read)
+                    for v in range(num_vars):
+                        if vec[v] > 0:
+                            new_read = list() + self.vars[var_i+v].alts[vec[v]-1] + list()
+
+                    p = self.prob_read(self.vars, range(var_i, var_j), vec)
+                    total_prob_ref -= p
+                    total_prob_added += p
+                    count_added += 1
+
+                    vec = get_next_vector(num_vars, counts, None)
+
+        self.wgt_ref = float(total_prob_ref) / count_ref
+        self.wgt_added = float(total_prob_added) / count_added
+        print('Avg probability of reads in ref:  %f' % self.wgt_ref)
+        print('Avg probability of added reads:   %f' % self.wgt_added)
 
     def count_kmers_ref(self):
         if self.h_ref:
@@ -100,43 +113,19 @@ class VarRanker:
 
             # Number of variants in window starting at this one
             k = 1
-            counts = [self.vars[i].num_alts]
             while i+k < self.num_v and self.vars[i+k].chrom == chrom and self.vars[i+k].pos < pos+r:
-                counts.append(self.vars[i+k].num_alts)
                 k += 1
 
-            segment_start = max(self.vars[i].pos - self.r + 1, 0)
-            segment_end = min(self.vars[i].pos + self.r, self.chrom_lens[chrom])
-            segment = self.genome[chrom][segment_start:segment_end]
-            chunks = [segment[:self.vars[i].pos - segment_start]]
-            for j in range(1, k):
-                chunks.append(segment[self.vars[i+j-1].pos + len(self.vars[i+j-1].orig) - segment_start : self.vars[i+j].pos - segment_start])
-            chunks.append(segments[self.vars[i+j].pos + len(self.vars[i+j].orig) - segment_start :])
+            iter = PseudocontigIterator(self.genome[chrom], self.vars[i:i+k], self.r)
 
-            # Allele vector
-            v = [1] + [0] * (k-1)
-            while v:
-                # j is the greatest index in v s.t. v[j] > 0
-                j = k-1
-                while v[j] == 0:
-                    j -= 1
-
-                # Create new pseudocontig
-                start = max(self.vars[i+j].pos - self.r + 1, 0)
-                end = min(pos + self.r - 1, self.chrom_lens[chrom])
-                E = list(self.genome[chrom][start:end+1])
-                for j in range(k):
-                    if v[j] > 0:
-                        var = self.vars[i+j]
-                        E = E[:var.pos] + var.alts[j-1] + E[var.pos + len(var.orig):]
-                pseudocontig = ''.join(E)
-
+            pseudocontig = iter.next()
+            while pseudocontig:
                 # Add to jellyfish
                 mers = jellyfish.string_canonicals(pseudocontig)
                 for m in mers:
                     h_added.add(m, 1)
 
-                v = self.get_next_vector(k, counts, v)
+                pseudocontig = iter.next()
 
     def prob_read(self, vars, var_ids, vec):
         '''
@@ -154,20 +143,23 @@ class VarRanker:
 
     def rank(self, method, out_file):
         ordered = None
-        if method == 'pop_cov':
+        print(method)
+        if method == 'popcov':
             ordered = self.rank_pop_cov()
-        elif method == 'pop_cov_blowup':
+        elif method == 'popcov_blowup':
             ordered = self.rank_pop_cov(True)
         elif method == 'ambiguity':
             ordered = self.rank_ambiguity()
 
         if ordered:
             with open(out_file, 'w') as f:
-                f.write(','.join([str(i) for i in ordered]))
+                f.write('\t'.join([self.vars[i].chrom + ',' + str(self.vars[i].pos+1) for i in ordered]))
 
     def rank_ambiguity(self):
         self.count_kmers_ref()
         self.count_kmers_added()
+
+        self.avg_read_prob()
 
         var_wgts = [(self.ambiguity(i), i) for i in range(self.num_v)]
         var_wgts.sort()
@@ -196,7 +188,7 @@ class VarRanker:
             ordered = self.rank_dynamic_blowup(upper_tier, lower_tier)
         else:
             # Variant weight is the sum of frequencies of alternate alleles
-            var_wgts = [(sum(self.vars[i].probs), i) for i in range(self.num_v)]
+            var_wgts = [(-sum(self.vars[i].probs), i) for i in range(self.num_v)]
             var_wgts.sort()
             ordered = [v[1] for v in var_wgts]
 
@@ -286,9 +278,10 @@ def go(args):
         r = 35
 
     genome = io.read_genome(args.reference, args.chrom)
-    vars = io.read_variants(args.vars)
+    vars = io.parse_1ksnp(args.vars)
 
     ranker = VarRanker(genome, vars, r, args.phasing)
+    ranker.rank(args.method, 'ordered.txt')
 
 
 if __name__ == '__main__':
@@ -308,9 +301,9 @@ if __name__ == '__main__':
     parser.add_argument("--vars", type=str, required=True,
         help="Path to 1ksnp file containing variant information")
     parser.add_argument('--chrom', type=str,
-        help="Name of chromosome from reference genome to process. If not present, process all chromosomes."
+        help="Name of chromosome from reference genome to process. If not present, process all chromosomes.")
     parser.add_argument('--window-size', type=int,
-        help="Radius of window (i.e. max read length) to use. Larger values will take longer. Default: 35"
+        help="Radius of window (i.e. max read length) to use. Larger values will take longer. Default: 35")
     parser.add_argument('--phasing', type=str, required=False,
         help="Path to file containing phasing information for each individual")
 

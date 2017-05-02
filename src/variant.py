@@ -10,7 +10,7 @@ class Variant:
         self.probs = probs
         self.num_alts = len(alts)
 
-    def add_alt(self, alt, prob)
+    def add_alt(self, alt, prob):
         self.alts.append(alt)
-        self.alts.append(prob)
+        self.probs.append(prob)
         self.num_alts += 1
