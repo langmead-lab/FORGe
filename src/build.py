@@ -32,13 +32,18 @@ class Builder:
                 chrom = self.vars[i].chrom
                 pos = self.vars[i].pos
 
+                debug = False
+                if pos == 254898:
+                    debug = True
+
                 # Number of variants in window starting at this one
                 k = 1
                 while i+k < self.num_v and self.vars[i+k].chrom == chrom and self.vars[i+k].pos < pos+self.r:
                     k += 1
 
                 iter = PseudocontigIterator(self.genome[chrom], self.vars[i:i+k], self.r)
-                pc = iter.next(i)
+
+                pc = iter.next(i, debug)
                 while pc:
                     pc_counts[chrom][iter.start] += 1
                     f.write('>' + chrom + ':' + str(iter.start) + ':' + str(pc_counts[chrom][iter.start]) + ':\n')

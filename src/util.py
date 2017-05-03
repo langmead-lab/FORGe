@@ -50,9 +50,12 @@ class PseudocontigIterator:
         for i in range(1, len(vars)):
             self.read_chunks.append(self.seq[vars[i-1].pos + len(vars[i-1].orig) : vars[i].pos])
 
-    def next(self, var_id):
+    def next(self, var_id, debug=False):
         if not self.vec:
             return None
+
+        if debug:
+            print(self.vec)
 
         first_alt_base = -1
         last_alt_base = -1
@@ -90,6 +93,10 @@ class PseudocontigIterator:
         if start_offset < 0:
             pos = self.vars[0].pos
             read = self.seq[pos+start_offset:pos] + read
+            if debug:
+                print(len(self.seq))
+                print(self.seq[92110:92170])
+                print(read)
         else:
             read = read[start_offset:]
         self.start = self.vars[0].pos + start_offset
