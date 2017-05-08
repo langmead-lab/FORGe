@@ -10,7 +10,7 @@ GENOME_LEN=1000000
 READLEN=75
 NREADS=100000
 NTHREADS=8
-CORRECT_PY=../../src/correctness/correctness.py
+CORRECT_PY=../util/correctness.py
 
 .SECONDARY:
 
@@ -37,6 +37,9 @@ cors: $(1)_base_stride_$(2)_pct_$(3)_alts.cor
 endef
 
 define type_stride
+$(1)_base_stride_$(2).cor: $(1)_base_stride_$(2).sam
+	pypy $$(CORRECT_PY) < $$< | awk -v FS='\t' '{print $$$$2,$$$$NF}' | sed 's/ZC:i://' > $$@
+
 $(1)_base_stride_$(2).sam: $(1)_base_stride_$(2).fq $(1)_base_stride_$(2).1.ht2
 	$$(HSA) --no-spliced-alignment --sam-no-qname-trunc -p $$(NTHREADS) -x $(1)_base_stride_$(2) -U $$< -S $$@
 
