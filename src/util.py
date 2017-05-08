@@ -129,8 +129,6 @@ class ReadIterator:
         self.vec = [0] * (self.last_var - self.first_var)
 
     def next(self):
-        print('Still buggy')
-        exit()
         if self.i >= self.chrom_len:
             return None
 
@@ -147,4 +145,4 @@ class ReadIterator:
             self.curr_vars = vars[self.first_var:self.last_var]
             self.vec = [0] * (self.last_var - self.first_var)
 
-
+            
