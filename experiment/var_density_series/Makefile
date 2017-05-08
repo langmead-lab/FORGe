@@ -8,6 +8,7 @@ GENOME_LEN=1000000
 READLEN=75
 NREADS=100000
 NTHREADS=8
+CORRECT_PY=../../src/correctness/correctness.py
 
 .SECONDARY:
 
@@ -18,10 +19,10 @@ overall.csv: cors
 
 define target_group
 $(1)_base_stride_$(2).cor: $(1)_base_stride_$(2).sam
-	pypy correctness.py < $$< | awk -v FS='\t' '{print $$$$2,$$$$NF}' | sed 's/ZC:i://' > $$@
+	pypy $$(CORRECT_PY) < $$< | awk -v FS='\t' '{print $$$$2,$$$$NF}' | sed 's/ZC:i://' > $$@
 
 $(1)_base_stride_$(2)_alts.cor: $(1)_base_stride_$(2)_alts.sam
-	pypy correctness.py < $$< | awk -v FS='\t' '{print $$$$2,$$$$NF}' | sed 's/ZC:i://' > $$@
+	pypy $$(CORRECT_PY) < $$< | awk -v FS='\t' '{print $$$$2,$$$$NF}' | sed 's/ZC:i://' > $$@
 
 $(1)_base_stride_$(2).sam: $(1)_base_stride_$(2).fq $(1)_base_stride_$(2).1.ht2
 	$$(HSA) --no-spliced-alignment --sam-no-qname-trunc -p $$(NTHREADS) -x $$(<:%.fq=%) -U $$< -S $$@
