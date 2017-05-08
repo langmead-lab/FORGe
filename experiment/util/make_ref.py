@@ -46,7 +46,7 @@ with open(fa) as fh:
         if lines_ln >= length:
             break
 
-genome = ''.join(lines)[:length]
+genome = ''.join(lines)[:length].upper()
 
 alt_genome = []
 vars = []  # [id], [single, deletion, or insertion], [chromosome], [0-based off], [alt]
@@ -65,7 +65,8 @@ while i + 2*stride < length:
         while in_base == alt_genome[-1][-1]:
             in_base = random.choice('ACGT')
         alt_genome[-1] = alt_genome[-1][:-1] + in_base
-        vars.append(['snp_%d' % (i+stride), 'single', genome_name, i+stride-1, in_base])
+        off = i+stride-1
+        vars.append(['snp_%d' % off, 'single', genome_name, off, in_base])
 
     alt_genome.append(genome[i+stride:i+stride+stride])
     # add deletion
@@ -78,9 +79,11 @@ while i + 2*stride < length:
         while in_base == alt_genome[-1][-1]:
             in_base = random.choice('ACGT')
         alt_genome[-1] = alt_genome[-1][:-1] + in_base
-        vars.append(['snp_%d' % (i+stride), 'single', genome_name, i+stride+stride-1, in_base])
+        off = i+stride+stride-1
+        vars.append(['snp_%d' % off, 'single', genome_name, off, in_base])
 
     i += 2*stride
+    assert len(''.join(alt_genome)) == i
 
 alt_genome.append(genome[i:i+(length-i)])
 

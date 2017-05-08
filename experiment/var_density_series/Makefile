@@ -44,10 +44,10 @@ $(foreach target,snp indel,$(foreach stride,800 400 200 100 50,$(eval $(call tar
 
 define stride_group
 indel_base_stride_$(1).fa indel_alt_stride_$(1).fa:
-	pypy make_ref.py indel $$(FA) $(1) $$(GENOME_LEN)
+	pypy ../util/make_ref.py indel $$(FA) $(1) $$(GENOME_LEN)
 
 snp_base_stride_$(1).fa snp_alt_stride_$(1).fa:
-	pypy make_ref.py snp $$(FA) $(1) $$(GENOME_LEN)
+	pypy ../util/make_ref.py snp $$(FA) $(1) $$(GENOME_LEN)
 
 cors:  snp_base_stride_$(1).cor      indel_base_stride_$(1).cor \
        snp_base_stride_$(1)_alts.cor indel_base_stride_$(1)_alts.cor
