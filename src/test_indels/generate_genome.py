@@ -3,7 +3,7 @@
 import sys
 import random
 
-l = 10000
+l = 1000000
 G = ''
 nts = ['A', 'C', 'G', 'T']
 for _ in range(l):

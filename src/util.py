@@ -50,7 +50,7 @@ class PseudocontigIterator:
         for i in range(1, len(vars)):
             self.read_chunks.append(self.seq[vars[i-1].pos + len(vars[i-1].orig) : vars[i].pos])
 
-    def next(self, var_id, debug=False):
+    def next(self, debug=False):
         if not self.vec:
             return None
 

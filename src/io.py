@@ -79,7 +79,7 @@ def parse_1ksnp(filename, G=None):
 
     return v
 
-def write_vars(vars, locs, outfile):
+def write_vars(variants, locs, outfile):
     f_out = open(outfile, 'w')
 
     last_loc = None
@@ -89,7 +89,7 @@ def write_vars(vars, locs, outfile):
     num_alts = 0
     count_added = 0
     num_target = len(locs)
-    with open(vars, 'r') as f:
+    with open(variants, 'r') as f:
         for line in f:
             row = line.rstrip().split('\t')
             loc = int(row[1])
@@ -117,6 +117,7 @@ class HaplotypeParser:
     def __init__(self, filename):
         self.filename = filename
         self.indiv_chunk_end = 0
+        self.indiv_chunk_size = 100000
 
     def get_freqs(self, var_ids, counts):
         '''

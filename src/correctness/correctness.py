@@ -85,7 +85,7 @@ def pos_from_mason1(name):
     return res.group(1), int(res.group(2)), res.group(3) == 'f'
 
 
-def same_pos(pos1, pos2, wiggle=0):
+def same_pos(pos1, pos2, wiggle=30):
     """ Returns true when the two positions are basically the same """
     refid1, pos1, strand1 = pos1
     refid2, pos2, strand2 = pos2

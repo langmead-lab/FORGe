@@ -32,18 +32,13 @@ class Builder:
                 chrom = self.vars[i].chrom
                 pos = self.vars[i].pos
 
-                debug = False
-                if pos == 254898:
-                    debug = True
-
                 # Number of variants in window starting at this one
                 k = 1
                 while i+k < self.num_v and self.vars[i+k].chrom == chrom and self.vars[i+k].pos < pos+self.r:
                     k += 1
 
                 iter = PseudocontigIterator(self.genome[chrom], self.vars[i:i+k], self.r)
-
-                pc = iter.next(i, debug)
+                pc = iter.next(i)
                 while pc:
                     pc_counts[chrom][iter.start] += 1
                     f.write('>' + chrom + ':' + str(iter.start) + ':' + str(pc_counts[chrom][iter.start]) + ':\n')
@@ -52,8 +47,7 @@ class Builder:
 
                     pc = iter.next(i)
 
-def top_vars(vars, ordered, pct):
-    
+def top_vars(variants, ordered, pct):
     with open(ordered, 'r') as f:
         ordered_vars = [(v.split(',')[0],int(v.split(',')[1])) for v in f.readline().split('\t')]
     num_targets = int(len(ordered_vars) * pct / 100.0)
@@ -62,7 +56,7 @@ def top_vars(vars, ordered, pct):
 
     selected = []
     curr_id = 0
-    for v in vars:
+    for v in variants:
         if v.chrom == targets[curr_id][0] and v.pos == targets[curr_id][1]-1:
             selected.append(v)
             curr_id += 1
@@ -79,17 +73,17 @@ def go(args):
         r = 35
 
     genome = io.read_genome(args.reference, None)
-    vars = io.parse_1ksnp(args.vars)
+    variants = io.parse_1ksnp(args.vars)
 
     if args.sorted and args.pct:
-        targets = top_vars(vars, args.sorted, args.pct)
+        targets = top_vars(variants, args.sorted, args.pct)
+    else:
+        builder = Builder(genome, targets, r)
 
-    builder = Builder(genome, targets, r)
-
-    if args.hisat:
-        builder.write_hisat(args.hisat)
-    if args.erg:
-        builder.write_erg(args.erg)
+        if args.hisat:
+            builder.write_hisat(args.hisat)
+        if args.erg:
+            builder.write_erg(args.erg)
 
 if __name__ == '__main__':
     if '--version' in sys.argv:
