@@ -24,7 +24,7 @@ def write_snps(snps, locs, outfile):
         for line in f:
             num_lines += 1
             row = line.rstrip().split('\t')
-            chrom = int(row[0])
+            chrom = row[0]
             loc = int(row[1])
 
             while curr_id < num_target and loc > locs[curr_id][1]:
@@ -73,8 +73,8 @@ def read_sorted(sorted_snps, pct):
     with open(sorted_snps, 'r') as f:
         #locs = f.readline().rstrip().split('\t')
         #locs = [(int(l.split(',')[1]), int(l.split(',')[0])) for l in locs]
-        row = f.readline().rstrip().split(',')
-        locs = [('19', int(r)) for r in row]
+        row = f.readline().rstrip().split('\t')
+        locs = [(r.split(',')[0], int(r.split(',')[1])) for r in row]
         print('%d total variants' % len(locs))
         num = int(len(locs) * pct / 100)
         return sorted(locs[:num])

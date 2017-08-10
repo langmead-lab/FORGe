@@ -134,7 +134,7 @@ def is_correct(toks, wiggle=30):
     return same_pos(true_pos, aligned_pos, wiggle=wiggle)
 
 
-def go():
+def go(results_file, pct, desc):
     ncorrect, nincorrect = 0, 0
     ncorrect_by_snp, nincorrect_by_snp, ntotal_by_snp = [0], [0], [0]
     max_nsnps = 0
@@ -168,7 +168,8 @@ def go():
             max_rare = nrare
         ntotal_by_rare[nrare] += 1
 
-        if toks[1] == '4':
+        # Skip unaligned and secondary alignments
+        if toks[1] == '4' or int(toks[1]) & 256:
             #print(ln + '\tZC:i:-1')
             continue
         if is_correct(toks, 30):
@@ -181,8 +182,17 @@ def go():
             nincorrect += 1
             nincorrect_by_snp[nsnps] += 1
             nincorrect_by_rare[nrare] += 1
-    print('correct=%d (%0.4f%%)' % (ncorrect, ncorrect*100.0/(ncorrect+nincorrect)), file=sys.stderr)
+    #print('correct=%d (%0.4f%%)' % (ncorrect, ncorrect*100.0/(ncorrect+nincorrect)), file=sys.stderr)
+    aligned = 100 * float(ncorrect_by_snp[0] + nincorrect_by_snp[0]) / ntotal_by_snp[0]
+    correct = 100 * float(ncorrect_by_snp[0]) / (ncorrect_by_snp[0] + nincorrect_by_snp[0])
+    overall = 100 * float(ncorrect_by_snp[0]) / ntotal_by_snp[0]
+    print('Aligned: %f' % (aligned))
+    print('Correct: %f' % (correct))
 
+    with open(results_file, 'a') as f:
+        f.write('%s\t%s\t%f\t%f\t%f' % (pct, desc, aligned, correct, overall))
+
+    '''
     print('')
     print('Stratified by # SNPs:')
     print('# reads\tAligned\tCorrect\tOverall Correct')
@@ -202,6 +212,7 @@ def go():
             corr = float(c)/(c+i)
 
         print('%d\t%f\t%f\t%f' % (t, acc, corr, corr_overall))
+    '''
 
     '''
     print('')
@@ -226,4 +237,4 @@ def go():
     '''
 
 if __name__ == '__main__':
-    go()
+    go(sys.argv[1], sys.argv[2], sys.argv[3])

@@ -41,6 +41,8 @@ class VarRanker:
         if self.wgt_ref and self.wgt_added:
             return
 
+        variants = self.variants
+
         # Average probability (weighted by genome length) of a specific read from the linear genome being chosen 
         total_prob_ref = sum(self.chrom_lens.values())
         count_ref = 0
@@ -52,40 +54,45 @@ class VarRanker:
         if self.hap_parser:
             self.hap_parser.reset_chunk()
 
+        num_v = len(variants)
+        r = self.r
+
         var_i = 0
         amb = 0.0
         for chrom, seq in self.genome.items():
-            count_ref += len(seq) - self.r + 1
-            for i in range(self.chrom_lens[chrom] - self.r + 1):
-                read = seq[i:i+self.r]
+            #print('Processing chrom %s' % chrom)
+            num_reads = self.chrom_lens[chrom] - r + 1
+            count_ref += num_reads
+            for i in range(num_reads):
+                read = seq[i:i+r]
                 if 'N' in read or 'M' in read or 'R' in read:
                     continue
 
                 # Set [var_i, var_j) to the range of variants contained in the current read
-                while var_i < self.num_v and self.variants[var_i].chrom == chrom and self.variants[var_i].pos < i:
+                while var_i < num_v and variants[var_i].chrom == chrom and variants[var_i].pos < i:
                     var_i += 1
                 var_j = var_i
-                while var_j < self.num_v and self.variants[var_i].chrom == chrom and self.variants[var_j].pos < i+self.r:
+                while var_j < num_v and variants[var_i].chrom == chrom and variants[var_j].pos < i+r:
                     var_j += 1
                 num_vars = var_j - var_i
 
                 if num_vars == 0:
                     continue
 
-                counts = [self.variants[id].num_alts for id in range(var_i,var_j)]
+                counts = [variants[id].num_alts for id in range(var_i,var_j)]
                 vec = get_next_vector(num_vars, counts, [0]*num_vars)
                 while vec:
                     #new_read = list(read)
                     #for v in range(num_vars):
                     #    if vec[v] > 0:
-                    #        new_read = list() + self.variants[var_i+v].alts[vec[v]-1] + list()
+                    #        new_read = list() + variants[var_i+v].alts[vec[v]-1] + list()
 
-                    p = self.prob_read(self.variants, range(var_i, var_j), vec)
+                    p = self.prob_read(variants, range(var_i, var_j), vec)
                     total_prob_ref -= p
                     total_prob_added += p
                     count_added += 1
 
-                    vec = get_next_vector(num_vars, counts, None)
+                    vec = get_next_vector(num_vars, counts, vec)
 
         self.wgt_ref = float(total_prob_ref) / count_ref
         self.wgt_added = float(total_prob_added) / count_added
@@ -132,7 +139,7 @@ class VarRanker:
 
                 pseudocontig = it.next()
 
-    def prob_read(self, variants, var_ids, vec):
+    def prob_read(self, variants, var_ids, vec, debug=False):
         '''
             Probability that a read contains the allele vector vec
         '''
@@ -144,6 +151,7 @@ class VarRanker:
                 self.freqs = self.hap_parser.get_freqs(var_ids, self.counts)
 
         f = self.freqs[vec_to_id(vec, self.counts)]
+
         return f
 
     def rank(self, method, out_file):
@@ -166,11 +174,52 @@ class VarRanker:
 
         self.avg_read_prob()
 
-        var_wgts = [(self.ambiguity(i), i) for i in range(self.num_v)]
+        print('Computing ambiguities')
+        if self.hap_parser:
+            self.hap_parser.reset_chunk()
+        var_wgts = [(self.compute_ambiguity(i), i) for i in range(self.num_v)]
         var_wgts.sort()
         ordered = [v[1] for v in var_wgts]
 
         return ordered
+
+    def compute_ambiguity(self, var_id):
+        r = self.r
+        chrom = self.variants[var_id].chrom
+        pos = self.variants[var_id].pos
+
+        # Number of variants in window starting at this one
+        k = 1
+        while var_id+k < self.num_v and self.variants[var_id+k].chrom == chrom and self.variants[var_id+k].pos < pos+self.r:
+            k += 1
+
+        amb_added = 0
+        it = PseudocontigIterator(self.genome[chrom], self.variants[var_id:var_id+k], self.r)
+        pseudocontig = it.next()
+        while pseudocontig:
+            vec = it.curr_vec
+            p = self.prob_read(self.variants, range(var_id, var_id+k), vec, debug=True)
+            for i in range(len(pseudocontig) - self.r + 1):
+                mer = jellyfish.MerDNA(pseudocontig[i:i+r])
+                mer.canonicalize()
+                c_linear = self.h_ref[mer]
+                if not c_linear:
+                    c_linear = 0
+                c_added = self.h_added[mer]
+                if not c_added:
+                    c_added = 0
+                c_total = c_linear + c_added
+
+                # Average relative probability of this read's other mappings
+                avg_wgt = c_linear * self.wgt_ref + (c_added-1) * self.wgt_added
+                amb_wgt = (p - avg_wgt) / (c_total)
+                for j in range(k):
+                    if vec[j]:
+                        amb_added += p - (p / float(c_total))
+
+            pseudocontig = it.next()
+
+        return amb_added
 
     def rank_pop_cov(self, with_blowup=False, threshold=0.5):
         if with_blowup:

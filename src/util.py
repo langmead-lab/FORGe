@@ -101,6 +101,7 @@ class PseudocontigIterator:
             read = read[start_offset:]
         self.start = self.vars[0].pos + start_offset
 
+        self.curr_vec = self.vec
         self.vec = get_next_vector(self.k, self.counts, self.vec)
 
         return read

@@ -205,6 +205,40 @@ class HaplotypeParser:
         self.indiv_chunk_start = None
         self.indiv_chunk_end = None
 
+    def good_turing_smoothing(self, counts):
+        '''
+            counts: a list of count frequencies, i.e. counts[i] is the number of haplotypes with frequency i
+            return: a list p of probabilities such that p[i] is the new probability for haplotypes with frequency i
+        '''
+
+        max_c = len(counts)
+        adj_counts = [0.0] * max_c
+        total_weight = 0.0
+        for i in range(max_c-1):
+            # No haplotypes with this frequency, so no need to compute probability
+            if counts[i] == 0:
+                continue
+
+            next_count = counts[i+1]
+            if next_count == 0:
+                for j in range(i+1, max_c):
+                    if counts[j] > 0:
+                        break
+                if counts[j] > 0:
+                    next_count = counts[i] + float(counts[j] - counts[i]) / (j - i)
+                else:
+                    # No haplotypes with greater frequency
+                    next_count = counts[i]
+
+            adj_counts[i] = (i+1) * float(next_count) / counts[i]
+            total_weight += (i+1) * float(next_count)
+
+        # Last frequency
+        adj_counts[-1] = i
+        total_weight += i * counts[-1]
+
+        return [i / total_weight for i in adj_counts]
+
     def vec_to_id(self, v, counts):
         id = 0
         for i in range(len(v)):
