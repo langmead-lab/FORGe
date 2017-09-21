@@ -38,14 +38,14 @@ class Builder:
                     k += 1
 
                 iter = PseudocontigIterator(self.genome[chrom], self.vars[i:i+k], self.r)
-                pc = iter.next(i)
+                pc = iter.next()
                 while pc:
                     pc_counts[chrom][iter.start] += 1
                     f.write('>' + chrom + ':' + str(iter.start) + ':' + str(pc_counts[chrom][iter.start]) + ':\n')
                     for n in range(0, len(pc), 60):
                         f.write(pc[n:n+60] + '\n')
 
-                    pc = iter.next(i)
+                    pc = iter.next()
 
 def top_vars(variants, ordered, pct):
     with open(ordered, 'r') as f:
@@ -75,19 +75,17 @@ def go(args):
     genome = io.read_genome(args.reference, None)
     variants = io.parse_1ksnp(args.vars)
 
-    if args.sorted and args.pct:
-        targets = top_vars(variants, args.sorted, args.pct)
-    else:
-        builder = Builder(genome, targets, r)
+    targets = top_vars(variants, args.sorted, args.pct)
+    builder = Builder(genome, targets, r)
 
-        if args.hisat:
-            builder.write_hisat(args.hisat)
-        if args.erg:
-            builder.write_erg(args.erg)
+    if args.hisat:
+        builder.write_hisat(args.hisat)
+    if args.erg:
+        builder.write_erg(args.erg)
 
 if __name__ == '__main__':
     if '--version' in sys.argv:
-        print('ERG v' + VERSION)
+        print('FORGe v' + VERSION)
         sys.exit(0)
 
     # Print file's docstring if -h is invoked

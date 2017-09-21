@@ -1,4 +1,4 @@
-#! /usr/bin/env python3
+#! /usr/bin/env python2.7
 
 import sys
 import argparse
@@ -25,7 +25,9 @@ def update_genome(indiv, seq, label, vcf, out_prefix, indels=None):
     fB = open(out_prefix + '_hapB.fa', 'w')
     fB.write(label)
 
-    f_vars = open('indiv_varsA.txt', 'w')
+    if vars_prefix:
+        f_pA = open(vars_prefix + '_hapA.txt')
+        f_pB = open(vars_prefix + '_hapB.txt')
 
     if indels:
         f_indelsA = open(indels+'A.txt', 'w')
@@ -66,6 +68,9 @@ def update_genome(indiv, seq, label, vcf, out_prefix, indels=None):
                     alleleA = int(row[col][0])
                     alleleB = int(row[col][2])
 
+                    if alleleA > 0 or alleleB > 0:
+                        total = len(cols) * 2
+
                     if alleleA > 0:
                         if indels:
                             if type == 'INDEL':
@@ -73,19 +78,16 @@ def update_genome(indiv, seq, label, vcf, out_prefix, indels=None):
                                 altLen = len(alts[alleleA-1])
                                 if origLen > altLen:
                                     f_indelsA.write(chrom + '\t' + str(loc+altLen) + '\t' + str(altLen-origLen) + '\n')
-                                    f_vars.write(name + '\tdeletion\t' + chrom + '\t' + str(loc-1+origLen) + '\t' + str(origLen - altLen) + '\n')
                                 elif len(alts[alleleA-1]) > 1:
                                     f_indelsA.write(chrom + '\t' + str(loc+origLen) + '\t' + str(altLen-origLen) + '\n')
-                                    f_vars.write(name + '\tinsertion\t' + chrom + '\t' + str(loc-1+origLen) + '\t' + alts[alleleA-1][origLen:] + '\n')
                                 else:
                                     print(orig)
                                     print(alts[allelleA-1])
                                     exit()
-                            else:
-                                f_vars.write(name + '\tsingle\t' + chrom + '\t' + str(loc-1) + '\t' + alts[alleleA-1] + '\n')
                             offset = add_alt(hapA, loc-1, orig, alts[alleleA-1], offset)
                         else:
                             hapA[loc+offset-1] = alts[alleleA-1]
+                        f_pA.write(str(loc+offset) + '\t' + 
                     if alleleB > 0:
                         if indels:
                             if type == 'INDEL':
@@ -105,10 +107,14 @@ def update_genome(indiv, seq, label, vcf, out_prefix, indels=None):
 
                     line_id += 1
 
+    if vars_prefix:
+        f_pA.close()
+        f_pB.close()
+
     if indels:
         f_indelsA.close()
         f_indelsB.close()
-    f_vars.close()
+        f_vars.close()
 
     for i in range(0, len(seq), 60):
         fA.write(''.join(hapA[i:i+60]) + '\n')

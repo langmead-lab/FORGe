@@ -1,4 +1,4 @@
-#! /usr/bin/env python3
+#! /usr/bin/env python2.7
 
 __author__ = 'jacobpritt'
 
@@ -94,7 +94,9 @@ def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None):
     filters = ingroup or outgroup
     S = []
 
-    f_out = open('chr19_filtered.vcf', 'w')
+    print_filtered = False
+    if print_filtered:
+        f_out = open(filename+'.filtered', 'w')
 
     if individuals:
         f_ind = open(individuals, 'w')
@@ -107,11 +109,13 @@ def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None):
         for line in f:
             # Skip header lines
             if line[0] == '#' and line[1] == '#':
-                f_out.write(line)
+                if print_filtered:
+                    f_out.write(line)
                 continue
 
             if not labels:
-                f_out.write(line)
+                if print_filtered:
+                    f_out.write(line)
 
                 labels = line.rstrip().split('\t')
 
@@ -183,7 +187,8 @@ def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None):
                                 #alleles2.append(str(v2))
 
                     if sum(counts)> 0:
-                        f_out.write(line)
+                        if print_filtered:
+                            f_out.write(line)
 
                         if len(S) == 0:
                             S = [(loc, alts, counts, total, chrom, name, orig)]
@@ -200,7 +205,8 @@ def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None):
                             f_ind.write(','.join(alleles1) + '\n')
                             #f_ind.write(','.join(alleles2) + '\n')
                     line_id += 1
-    f_out.close()
+    if print_filtered:
+        f_out.close()
 
     if individuals:
         f_ind.close()

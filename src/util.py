@@ -37,25 +37,40 @@ def vec_to_id(v, counts):
 class PseudocontigIterator:
     ''' Loop over all pseudocontigs that contain a certain set of variants '''
 
-    def __init__(self, chrom_seq, vars, r):
+    def __init__(self, chrom_seq, vars, r, vec=None):
         self.seq = chrom_seq
         self.vars = vars
         self.r = r
         self.k = len(vars)
         self.counts = [v.num_alts for v in self.vars]
 
-        self.vec = [1] + [0] * (self.k-1)
+        if vec:
+            self.vec = vec
+        else:
+            self.vec = [1] + [0] * (self.k-1)
 
         self.read_chunks = []
         for i in range(1, len(vars)):
             self.read_chunks.append(self.seq[vars[i-1].pos + len(vars[i-1].orig) : vars[i].pos])
 
+        self.valid = True
+        for chunk in self.read_chunks:
+            if 'N' in chunk or 'M' in chunk or 'R' in chunk:
+                self.valid = False
+                break
+
     def next(self, debug=False):
+        '''
+            Return the current read and iterate to the next one
+        '''
+
         if not self.vec:
             return None
 
         if debug:
             print(self.vec)
+
+        valid = True
 
         first_alt_base = -1
         last_alt_base = -1
@@ -85,26 +100,34 @@ class PseudocontigIterator:
         rlen = len(read)
         if end_offset > rlen:
             pos = self.vars[-1].pos + len(self.vars[-1].orig)
-            read += self.seq[pos : pos + end_offset - rlen]
+            suffix = self.seq[pos : pos+end_offset-rlen]
+            if 'N' in suffix or 'M' in suffix or 'R' in suffix:
+                valid = False
+            read += suffix
         else:
             read = read[:end_offset]
 
         start_offset = last_alt_base - self.r
         if start_offset < 0:
             pos = self.vars[0].pos
-            read = self.seq[pos+start_offset:pos] + read
-            if debug:
-                print(len(self.seq))
-                print(self.seq[92110:92170])
-                print(read)
+
+            prefix = self.seq[pos+start_offset:pos]
+            if 'N' in prefix or 'M' in prefix or 'R' in prefix:
+                valid = False
+
+            read = prefix + read
         else:
             read = read[start_offset:]
         self.start = self.vars[0].pos + start_offset
 
-        self.curr_vec = self.vec
+        self.curr_vec = self.vec[:]
+        
         self.vec = get_next_vector(self.k, self.counts, self.vec)
 
-        return read
+        if valid:
+            return read
+        else:
+            return self.next()
 
 class ReadIterator:
     ''' Loop over all reads in a genome '''

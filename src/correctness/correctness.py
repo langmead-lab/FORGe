@@ -93,27 +93,24 @@ def same_pos(pos1, pos2, wiggle=30):
         return False
     return abs(pos1 - pos2) < wiggle
 
-def parse_label(label):
-    # Parse label and return number of SNPs and their frequencies
+def parse_label(label, rare_thresh=0.05):
+    # Parse label and return # SNPs, # rare SNPs (frequency < rare_thresh), and # deleterious SNPs
     label = label.split(' ')
-    snps = 0
+    snps, rare, deleterious = 0,0,0
     for l in label:
         if l[:6] == 'nsnps=':
             snps = int(l[6:])
         elif l[:6] == 'freqs=':
             freqs = l[6:]
+            rare = 0
             if len(freqs) > 0:
                 freqs = [float(f) for f in l[6:].split(',')]
-            else:
-                freqs = []
-    if snps == 0:
-        return 0, []
-    if not snps == len(freqs):
-        print('Error!')
-        print('%d SNPs' % snps)
-        print('Freqs: ' + str(freqs))
-        exit()
-    return snps, freqs
+                for f in freqs:
+                    if f < rare_thresh:
+                        rare += 1
+        elif l[:4] == 'del=':
+            deleterious = int(l[4:])
+    return snps, rare, deleterious
 
 def is_correct(toks, wiggle=30):
     """ Checks whether alignment, tokenized in toks, is correct """
@@ -134,14 +131,17 @@ def is_correct(toks, wiggle=30):
     return same_pos(true_pos, aligned_pos, wiggle=wiggle)
 
 
-def go(results_file, pct, desc):
-    ncorrect, nincorrect = 0, 0
-    ncorrect_by_snp, nincorrect_by_snp, ntotal_by_snp = [0], [0], [0]
-    max_nsnps = 0
+def go(results_prefix, pct, desc):
+    ncorrect, nincorrect, ntotal = 0, 0, 0
+    ncorrect_snp, nincorrect_snp, ntotal_snp = [0], [0], [0]
+    max_snps = 0
 
     rare_freq = 0.05
-    ncorrect_by_rare, nincorrect_by_rare, ntotal_by_rare = [0], [0], [0]
+    ncorrect_rare, nincorrect_rare, ntotal_rare = [0], [0], [0]
     max_rare = 0
+
+    ncorrect_del, nincorrect_del, ntotal_del = [0], [0], [0]
+    max_del = 0
 
     for ln in sys.stdin:
         if ln[0] == '@':
@@ -149,92 +149,104 @@ def go(results_file, pct, desc):
         ln = ln.rstrip()
         toks = ln.split('\t')
 
-        nsnps, freqs = parse_label(toks[0])
-        if nsnps > max_nsnps:
-            ncorrect_by_snp += [0] * (nsnps - max_nsnps)
-            nincorrect_by_snp += [0] * (nsnps - max_nsnps)
-            ntotal_by_snp += [0] * (nsnps - max_nsnps)
-            max_nsnps = nsnps
-        ntotal_by_snp[nsnps] += 1
-
-        nrare = 0
-        for f in freqs:
-            if f < rare_freq:
-                nrare += 1
-        if nrare > max_rare:
-            ncorrect_by_rare += [0] * (nrare - max_rare)
-            nincorrect_by_rare += [0] * (nrare - max_rare)
-            ntotal_by_rare += [0] * (nrare - max_rare)
-            max_rare = nrare
-        ntotal_by_rare[nrare] += 1
-
         # Skip unaligned and secondary alignments
-        if toks[1] == '4' or int(toks[1]) & 256:
+        if int(toks[1]) & 256:
             #print(ln + '\tZC:i:-1')
             continue
+
+        ntotal += 1
+        nsnps, nrare, ndel = parse_label(toks[0], rare_freq)
+        if nsnps > max_snps:
+            ncorrect_snp += [0] * (nsnps - max_snps)
+            nincorrect_snp += [0] * (nsnps - max_snps)
+            ntotal_snp += [0] * (nsnps - max_snps)
+            max_snps = nsnps
+
+        if nrare > max_rare:
+            ncorrect_rare += [0] * (nrare - max_rare)
+            nincorrect_rare += [0] * (nrare - max_rare)
+            ntotal_rare += [0] * (nrare - max_rare)
+            max_rare = nrare
+
+        if ndel > max_del:
+            ncorrect_del += [0] * (ndel - max_del)
+            nincorrect_del += [0] * (ndel - max_del)
+            ntotal_del += [0] * (ndel - max_del)
+            max_del = ndel
+
+        ntotal_snp[nsnps] += 1
+        ntotal_rare[nrare] += 1
+        ntotal_del[ndel] += 1
+
+        if toks[1] == '4':
+            continue
+
         if is_correct(toks, 30):
             #print(ln + '\tZC:i:1')
             ncorrect += 1
-            ncorrect_by_snp[nsnps] += 1
-            ncorrect_by_rare[nrare] += 1
+            ncorrect_snp[nsnps] += 1
+            ncorrect_rare[nrare] += 1
+            ncorrect_del[ndel] += 1
         else:
             #print(ln + '\tZC:i:0')
             nincorrect += 1
-            nincorrect_by_snp[nsnps] += 1
-            nincorrect_by_rare[nrare] += 1
-    #print('correct=%d (%0.4f%%)' % (ncorrect, ncorrect*100.0/(ncorrect+nincorrect)), file=sys.stderr)
-    aligned = 100 * float(ncorrect_by_snp[0] + nincorrect_by_snp[0]) / ntotal_by_snp[0]
-    correct = 100 * float(ncorrect_by_snp[0]) / (ncorrect_by_snp[0] + nincorrect_by_snp[0])
-    overall = 100 * float(ncorrect_by_snp[0]) / ntotal_by_snp[0]
-    print('Aligned: %f' % (aligned))
-    print('Correct: %f' % (correct))
+            nincorrect_snp[nsnps] += 1
+            nincorrect_rare[nrare] += 1
+            nincorrect_del[ndel] += 1
 
-    with open(results_file, 'a') as f:
-        f.write('%s\t%s\t%f\t%f\t%f' % (pct, desc, aligned, correct, overall))
+    aligned = 100 * float(ncorrect + nincorrect) / ntotal
+    correct = 100 * float(ncorrect) / (ncorrect + nincorrect)
+    overall = 100 * float(ncorrect) / ntotal
+    with open(results_prefix+'.tsv', 'a') as f:
+        f.write('%s\t%s\t%f\t%f\t%f\n' % (pct, desc, aligned, correct, overall))
 
-    '''
-    print('')
-    print('Stratified by # SNPs:')
-    print('# reads\tAligned\tCorrect\tOverall Correct')
-    for i in range(max_nsnps+1):
-        t = ntotal_by_snp[i]
-        c = ncorrect_by_snp[i]
-        i = nincorrect_by_snp[i]
-        if t == 0:
-            acc = 0
-            corr_overall = 0
-        else:
-            acc = float(c+i)/t
-            corr_overall = float(c)/t
-        if (c+i) == 0:
-            corr = 0
-        else:
-            corr = float(c)/(c+i)
+    with open(results_prefix+'.strat_snp.tsv', 'a') as f:
+        for i in range(max_snps+1):
+            tot = ntotal_snp[i]
+            cor = ncorrect_snp[i]
+            inc = nincorrect_snp[i]
+            if tot > 0:
+                aligned = float(cor+inc)/tot
+                overall = float(cor)/tot
+                if (cor+inc) == 0:
+                    correct = -1
+                else:
+                    correct = float(cor)/(cor+inc)
 
-        print('%d\t%f\t%f\t%f' % (t, acc, corr, corr_overall))
-    '''
+                f.write('%s\t%d\t%d\t%s\t%f\t%f\t%f\n' % (pct, i, tot, desc, aligned, correct, overall))
 
-    '''
-    print('')
-    print('Stratified by # rare (< %f) SNPs:' % rare_freq)
-    print('# reads\tAligned\tCorrect\tOverall Correct')
-    for i in range(max_rare+1):
-        t = ntotal_by_rare[i]
-        c = ncorrect_by_rare[i]
-        i = nincorrect_by_rare[i]
-        if t == 0:
-            acc = 0
-            corr_overall = 0
-        else:
-            acc = float(c+i)/t
-            corr_overall = float(c)/t
-        if (c+i) == 0:
-            corr = 0
-        else:
-            corr = float(c)/(c+i)
+    with open(results_prefix+'.strat_rare.tsv', 'a') as f:
+        for i in range(max_rare+1):
+            tot = ntotal_rare[i]
+            cor = ncorrect_rare[i]
+            inc = nincorrect_rare[i]
+            if tot > 0:
+                aligned = float(cor+inc)/tot
+                overall = float(cor)/tot
+                if (cor+inc) == 0:
+                    correct = -1
+                else:
+                    correct = float(cor)/(cor+inc)
 
-        print('%d\t%f\t%f\t%f' % (t, acc, corr, corr_overall))
-    '''
+                f.write('%s\t%d\t%d\t%s\t%f\t%f\t%f\n' % (pct, i, tot, desc, aligned, correct, overall))
+
+    with open(results_prefix+'.strat_del.tsv', 'a') as f:
+        for i in range(max_del+1):
+            tot = ntotal_del[i]
+            cor = ncorrect_del[i]
+            inc = nincorrect_del[i]
+            if tot > 0:
+                aligned = float(cor+inc)/tot
+                overall = float(cor)/tot
+                if (cor+inc) == 0:
+                    correct = -1
+                else:
+                    correct = float(cor)/(cor+inc)
+
+                f.write('%s\t%d\t%d\t%s\t%f\t%f\t%f\n' % (pct, i, tot, desc, aligned, correct, overall))
 
 if __name__ == '__main__':
-    go(sys.argv[1], sys.argv[2], sys.argv[3])
+    results_prefix = sys.argv[1]
+    pct = sys.argv[2]
+    desc = sys.argv[3]
+    go(results_prefix, pct, desc)

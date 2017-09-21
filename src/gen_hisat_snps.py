@@ -1,4 +1,4 @@
-#! /usr/bin/env python3
+#! /usr/bin/env python2.7
 
 import sys
 import argparse
@@ -100,11 +100,6 @@ if __name__ == '__main__':
 
     if args.sorted_snps:
         locs = read_sorted(args.sorted_snps, args.pct)
-
-        for i in range(len(locs)):
-            if locs[i][0] == '10':
-                print(locs[i-1:i+1])
-                exit()
     else:
         locs = None
     write_snps(args.snps, locs, args.out)
