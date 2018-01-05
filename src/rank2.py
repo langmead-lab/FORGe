@@ -10,7 +10,6 @@ import jellyfish
 import io
 import variant
 from util import *
-import time
 
 VERSION = '0.0.1'
 
@@ -27,8 +26,6 @@ class VarRanker:
 
         if phasing:
             self.hap_parser = io.HaplotypeParser(phasing)
-
-        self.max_v_in_window = 15
 
         self.debug = debug
 
@@ -47,7 +44,7 @@ class VarRanker:
         variants = self.variants
 
         # Average probability (weighted by genome length) of a specific read from the linear genome being chosen 
-        total_prob_ref = 0 #sum(self.chrom_lens.values())
+        total_prob_ref = sum(self.chrom_lens.values())
         count_ref = 0
 
         # Average probability (weighted by genome length) of a specific read from the added pseudocontigs being chosen 
@@ -80,13 +77,9 @@ class VarRanker:
                 num_vars = var_j - var_i
 
                 if num_vars == 0:
-                    total_prob_ref += 1
                     continue
-                elif num_vars > self.max_v_in_window:
-                    num_vars = self.max_v_in_window
-                    var_j = var_i + num_vars
 
-                '''
+                counts = [variants[id].num_alts for id in range(var_i,var_j)]
                 vec = get_next_vector(num_vars, counts, [0]*num_vars)
                 while vec:
                     #new_read = list(read)
@@ -100,18 +93,6 @@ class VarRanker:
                     count_added += 1
 
                     vec = get_next_vector(num_vars, counts, vec)
-                '''
-
-                num_pcs = 1
-                for c in range(var_i, var_j):
-                    num_pcs *= variants[c].num_alts
-                count_added += num_pcs
-
-                vec = [0] * num_vars
-                p_ref = self.prob_read(variants, range(var_i, var_j), vec)
-                p_alts = 1 - p_ref
-                total_prob_ref += p_ref
-                total_prob_added += p_alts
 
         self.wgt_ref = float(total_prob_ref) / count_ref
         self.wgt_added = float(total_prob_added) / count_added
@@ -135,9 +116,6 @@ class VarRanker:
         if self.h_added:
             return
 
-        total = 0
-        total_r = 0
-
         jellyfish.MerDNA.k(self.r)
         self.h_added = jellyfish.HashCounter(1024, 5)
 
@@ -150,12 +128,7 @@ class VarRanker:
             while i+k < self.num_v and self.variants[i+k].chrom == chrom and self.variants[i+k].pos < pos+self.r:
                 k += 1
 
-            if k > self.max_v_in_window:
-                alt_freqs = [(sum(self.variants[i+j].probs), j) for j in range(1, k)]
-                ids = [f[1] for f in sorted(alt_freqs, reverse=True)[:self.max_v_in_window-1]]
-                it = PseudocontigIterator(self.genome[chrom], [self.variants[i]]+[self.variants[v] for v in ids], self.r)
-            else:
-                it = PseudocontigIterator(self.genome[chrom], self.variants[i:i+k], self.r)
+            it = PseudocontigIterator(self.genome[chrom], self.variants[i:i+k], self.r)
 
             pseudocontig = it.next()
             while pseudocontig:
@@ -164,13 +137,7 @@ class VarRanker:
                 for m in mers:
                     self.h_added.add(m, 1)
 
-                #total += 1
-                #total_r += len(pseudocontig) - self.r + 1
-
                 pseudocontig = it.next()
-
-        #print('%d total pseudocontigs' % total)
-        #print('%d total reads' % total_r)
 
     def prob_read(self, variants, var_ids, vec, debug=False):
         '''
@@ -196,7 +163,14 @@ class VarRanker:
         elif method == 'popcov-blowup':
             ordered = self.rank_pop_cov(True)
         elif method == 'amb':
+
+            with open('debug.txt', 'w') as f_debug:
+                f_debug.write('Ranking by amgiguity...\n')
+
             ordered, ordered_blowup = self.rank_ambiguity()
+
+        with open('debug.txt', 'w') as f_debug:
+            f_debug.write('Finished ranking, writing...\n')
 
         if ordered:
             with open(out_file, 'w') as f:
@@ -206,40 +180,29 @@ class VarRanker:
                 f.write('\t'.join([self.variants[i].chrom + ',' + str(self.variants[i].pos+1) for i in ordered_blowup]))
 
     def rank_ambiguity(self, threshold=0.5):
-
         '''
-        import cProfile
-        import pstats
-        import io
-        pr = cProfile.Profile()
-        pr.enable()
-        print('Computing avg read prob')
-        self.avg_read_prob()
-        pr.disable()
-        s = io.StringIO()
-        sortby = 'tottime'
-        ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
-        ps.print_stats(30)
-        print(s.getvalue())
-        exit()
-        '''        
-
         print('Counting kmers in ref')
-        #time1 = time.time()
+        with open('debug.txt', 'w') as f_debug:
+            f_debug.write('  Counting kmers in ref...\n')
+
         self.count_kmers_ref()
-        #time2 = time.time()
-        #print('Ref counting time: %f m' % ((time2-time1)/60))
         print('Counting added kmers')
         self.count_kmers_added()
-        #time3 = time.time()
-        #print('Added counting time: %f m' % ((time3-time2)/60))
+
+        with open('debug.txt', 'w') as f_debug:
+            f_debug.write('  Counting added kmers...\n')
 
         print('Finished counting kmers')
         print('')
 
+        with open('debug.txt', 'w') as f_debug:
+            f_debug.write('  Computing avg read prob...\n')
+
+
         self.avg_read_prob()
-        #time4 = time.time()
-        #print('Avg prob time: %f m' % ((time4-time3)/60))
+
+        with open('debug.txt', 'w') as f_debug:
+            f_debug.write('  Computing ambiguities...\n')
 
         print('Computing ambiguities')
         if self.hap_parser:
@@ -260,15 +223,13 @@ class VarRanker:
         #            self.compute_ambiguity(chrom, i, var_id, var_wgts)
 
         for v in range(self.num_v):
-            if v % 100000 == 0:
-                print('Processing %d / %d variants' % (v, self.num_v))
             self.compute_ambiguity(v, var_wgts)
 
         with open('amb_wgts.txt', 'w') as f_amb:
             f_amb.write(','.join([str(w) for w in var_wgts]))
-        
-        #with open('amb_wgts.txt', 'r') as f_amb:
-        #    var_wgts = [float(w) for w in f_amb.readline().rstrip().split(',')]
+        '''
+        with open('amb_wgts.txt', 'r') as f_amb:
+            var_wgts = [float(w) for w in f_amb.readline().rstrip().split(',')]
 
         var_ambs = [(var_wgts[i], i) for i in range(self.num_v)]
         var_ambs.sort()
@@ -318,22 +279,13 @@ class VarRanker:
         while first_var+k < self.num_v and self.variants[first_var+k].chrom == chrom and self.variants[first_var+k].pos < pos+r:
             k += 1
 
-        if k > 14:
-            sys.stdout.write('Processing variant %d with %d neighbors' % (first_var, k))
-
-        if k > self.max_v_in_window:
-            alt_freqs = [(sum(self.variants[i+j].probs), j) for j in range(1, k)]
-            ids = [i] + [f[1] for f in sorted(alt_freqs, reverse=True)[:self.max_v_in_window-1]]
-            it = PseudocontigIterator(self.genome[chrom], [self.variants[v] for v in ids], self.r)
-        else:
-            ids = range(first_var, first_var+k)
-            it = PseudocontigIterator(self.genome[chrom], self.variants[first_var:first_var+k], r)
+        it = PseudocontigIterator(self.genome[chrom], self.variants[first_var:first_var+k], r)
 
         pseudocontig = it.next()
         while pseudocontig:
             vec = it.curr_vec
 
-            p = self.prob_read(self.variants, ids, vec, debug=True)
+            p = self.prob_read(self.variants, range(first_var, first_var+k), vec, debug=True)
             for i in range(len(pseudocontig) - self.r + 1):
                 mer = jellyfish.MerDNA(pseudocontig[i:i+r])
                 mer.canonicalize()
@@ -366,9 +318,6 @@ class VarRanker:
                         var_ambs[first_var+j] -= amb_wgt
 
             pseudocontig = it.next()
-
-        if k > 14:
-            print('Done')
 
     def rank_pop_cov(self, with_blowup=False, threshold=0.5):
         if with_blowup:
@@ -499,17 +448,22 @@ def go(args):
         r = args.window_size
     else:
         r = 35
-    if args.output:
-        o = args.output
-    else:
-        o = 'ordered.txt'
+
+    with open('debug.txt', 'w') as f_debug:
+        f_debug.write('Reading genome...\n')
 
     genome = io.read_genome(args.reference, args.chrom)
 
+    with open('debug.txt', 'w') as f_debug:
+        f_debug.write('Parsing variants...\n')
+
     vars = io.parse_1ksnp(args.vars)
 
+    with open('debug.txt', 'w') as f_debug:
+        f_debug.write('Ranking variants...\n')
+
     ranker = VarRanker(genome, vars, r, args.phasing)
-    ranker.rank(args.method, o)
+    ranker.rank(args.method, 'ordered.txt')
 
 
 if __name__ == '__main__':
@@ -534,9 +488,6 @@ if __name__ == '__main__':
         help="Radius of window (i.e. max read length) to use. Larger values will take longer. Default: 35")
     parser.add_argument('--phasing', type=str, required=False,
         help="Path to file containing phasing information for each individual")
-    parser.add_argument('--output', type=str, required=False,
-        help="Path to file to write output ranking to. Default: 'ordered.txt'"
-
 
     args = parser.parse_args(sys.argv[1:])
     go(args)

@@ -17,7 +17,7 @@ def get_mutation_type(info):
             return a[3:]
 
 
-def update_genome(indiv, seq, label, vcf, out_prefix, indels=None):
+def update_genome(indiv, seq, label, vcf, out_prefix, indels=None, vars_prefix=None):
     hapA = list(seq[:])
     hapB = list(seq[:])
     fA = open(out_prefix + '_hapA.fa', 'w')
@@ -68,9 +68,6 @@ def update_genome(indiv, seq, label, vcf, out_prefix, indels=None):
                     alleleA = int(row[col][0])
                     alleleB = int(row[col][2])
 
-                    if alleleA > 0 or alleleB > 0:
-                        total = len(cols) * 2
-
                     if alleleA > 0:
                         if indels:
                             if type == 'INDEL':
@@ -87,7 +84,6 @@ def update_genome(indiv, seq, label, vcf, out_prefix, indels=None):
                             offset = add_alt(hapA, loc-1, orig, alts[alleleA-1], offset)
                         else:
                             hapA[loc+offset-1] = alts[alleleA-1]
-                        f_pA.write(str(loc+offset) + '\t' + 
                     if alleleB > 0:
                         if indels:
                             if type == 'INDEL':

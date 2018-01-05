@@ -116,12 +116,15 @@ class HaplotypeParser:
 
     def __init__(self, filename):
         self.filename = filename
+        self.indiv_chunk_start = 0
         self.indiv_chunk_end = 0
+        self.numH = 0
         self.indiv_chunk_size = 100000
+        self.chunk_offset = 0 # location in file to seek for start of next chunk
 
     def get_freqs(self, var_ids, counts):
         '''
-            Return an array containing the add-1 smoothed frequency for each combination of alleles among the SNPs given
+            Return an array containing the smoothed frequency for each combination of alleles among the SNPs given
         '''
 
         if (not self.indiv_chunk_end) or (var_ids[-1] >= self.indiv_chunk_end):
@@ -135,7 +138,6 @@ class HaplotypeParser:
             num_vecs *= (c+1)
 
         total = num_vecs
-        numH = len(self.haplotypes[0])
         good_turing = False
         if len(var_ids) > 8:
             # Good Turing smoothing
@@ -143,14 +145,14 @@ class HaplotypeParser:
             allele_counts = [0] * num_vecs
         elif len(var_ids) > 1:
             # Plus 1 smoothing
-            total = num_vecs + numH
+            total = num_vecs + self.numH
             allele_counts = [1] * num_vecs
         else:
             # No smoothing
-            total = numH
+            total = self.numH
             allele_counts = [0] * num_vecs
 
-        for i in range(numH):
+        for i in range(self.numH):
             v = [self.haplotypes[j-self.indiv_chunk_start][i] for j in var_ids]
             allele_counts[self.vec_to_id(v, counts)] += 1
 
@@ -171,39 +173,36 @@ class HaplotypeParser:
             min_snp, max_snp: Line ids in the file of the first and last SNPs in the current window
         '''
 
-        if max_snp < self.indiv_chunk_end:
-            print('No need to update chunk')
-            return
+        if max_snp >= self.indiv_chunk_end + self.indiv_chunk_size:
+            print('Error! Chunk size is not large enough to hold all SNPs in window! Try increasing indiv_chunk_size')
+            exit()
 
-        if self.indiv_chunk_end:
-            new_start = min(self.indiv_chunk_end, min_snp)
-            new_end = self.indiv_chunk_end + self.indiv_chunk_size
-        else:
-            new_start = 0
-            new_end = self.indiv_chunk_size
-
-        while max_snp >= new_end:
-            new_end += self.indiv_chunk_size
-
-        haplotypes = []
         with open(self.filename, 'r') as f:
-            line_id = 0
-            for line in f:
-                if line_id < new_start:
-                    line_id += 1
-                    continue
-                elif line_id >= new_end:
-                    break
-                else:
-                    haplotypes.append([int(allele) for allele in line.rstrip().split(',')])
+            if min_snp < self.indiv_chunk_end:
+                prev_lines = self.indiv_chunk_end - min_snp
+                prev_chunk_start = len(self.haplotypes) - prev_lines
+            else:
+                prev_lines = 0
 
-        self.indiv_chunk_start = new_start
-        self.indiv_chunk_end = new_end
-        self.haplotypes = haplotypes
+            if not self.numH:
+                self.numH = len(f.readline().rstrip().split(','))
+
+            f.seek(self.chunk_offset)
+            haplotypes = [0] * (prev_lines + self.indiv_chunk_size)
+            for i in range(prev_lines):
+                haplotypes[i] = self.haplotypes[prev_chunk_start + i]
+            for i in range(prev_lines, prev_lines+self.indiv_chunk_size):
+                haplotypes[i] = [int(allele) for allele in f.readline().rstrip().split(',')]
+
+            self.chunk_offset = f.tell()
+            self.indiv_chunk_start = min(min_snp, self.indiv_chunk_end)
+            self.indiv_chunk_end += self.indiv_chunk_size
+            self.haplotypes = haplotypes
 
     def reset_chunk(self):
-        self.indiv_chunk_start = None
-        self.indiv_chunk_end = None
+        self.indiv_chunk_start = 0
+        self.indiv_chunk_end = 0
+        self.chunk_offset = 0
 
     def good_turing_smoothing(self, counts):
         '''

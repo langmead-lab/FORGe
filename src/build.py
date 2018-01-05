@@ -24,6 +24,9 @@ class Builder:
         io.write_vars(filename)
 
     def write_erg(self, filename):
+        print('Writing ERG')
+        print(self.num_v)
+        print(self.r)
         with open(filename, 'w') as f:
             pc_counts = dict()
             for chrom,seq in self.genome.items():
@@ -46,6 +49,7 @@ class Builder:
                         f.write(pc[n:n+60] + '\n')
 
                     pc = iter.next()
+        print('Done')
 
 def top_vars(variants, ordered, pct):
     with open(ordered, 'r') as f:

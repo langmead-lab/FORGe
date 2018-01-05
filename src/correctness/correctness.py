@@ -96,7 +96,7 @@ def same_pos(pos1, pos2, wiggle=30):
 def parse_label(label, rare_thresh=0.05):
     # Parse label and return # SNPs, # rare SNPs (frequency < rare_thresh), and # deleterious SNPs
     label = label.split(' ')
-    snps, rare, deleterious = 0,0,0
+    snps, rare, deleterious, exome, conf, rep, alu = 0,0,0,0,0,0,0
     for l in label:
         if l[:6] == 'nsnps=':
             snps = int(l[6:])
@@ -110,7 +110,31 @@ def parse_label(label, rare_thresh=0.05):
                         rare += 1
         elif l[:4] == 'del=':
             deleterious = int(l[4:])
-    return snps, rare, deleterious
+        elif l[:5] == 'conf=':
+            c = int(l[5:])
+            if c == 2:
+                conf = 1
+            else:
+                conf = 0
+        elif l[:6] == 'exome=':
+            e = int(l[6:])
+            if e == 2:
+                exome = 1
+            else:
+                exome = 0
+        elif l[:4] == 'rep=':
+            r = int(l[4:])
+            if r == 2:
+                rep = 1
+            else:
+                rep = 0
+        elif l[:4] == 'alu=':
+            r = int(l[4:])
+            if r == 2:
+                alu = 1
+            else:
+                alu = 0
+    return snps, rare, deleterious, exome, conf, rep, alu
 
 def is_correct(toks, wiggle=30):
     """ Checks whether alignment, tokenized in toks, is correct """
@@ -137,11 +161,20 @@ def go(results_prefix, pct, desc):
     max_snps = 0
 
     rare_freq = 0.05
-    ncorrect_rare, nincorrect_rare, ntotal_rare = [0], [0], [0]
-    max_rare = 0
+    ncorrect_rare, nincorrect_rare, ntotal_rare = [0,0], [0,0], [0,0]
+    #max_rare = 0
 
     ncorrect_del, nincorrect_del, ntotal_del = [0], [0], [0]
     max_del = 0
+
+    ncorrect_exome, nincorrect_exome, ntotal_exome = [0,0], [0,0], [0,0]
+    ncorrect_conf, nincorrect_conf, ntotal_conf = [0,0], [0,0], [0,0]
+    ncorrect_rep, nincorrect_rep, ntotal_rep = [0,0], [0,0], [0,0]
+    ncorrect_alu, nincorrect_alu, ntotal_alu = [0,0], [0,0], [0,0]
+    ncorrect_cent, nincorrect_cent, ntotal_cent, cent_bounds = 0, 0, 0, [39000000,71000000]
+
+    #f_incorrect0 = open('incorrect0.sam', 'w')
+    #f_incorrect1 = open('incorrect1.sam', 'w')
 
     for ln in sys.stdin:
         if ln[0] == '@':
@@ -155,18 +188,27 @@ def go(results_prefix, pct, desc):
             continue
 
         ntotal += 1
-        nsnps, nrare, ndel = parse_label(toks[0], rare_freq)
+        nsnps, nrare, ndel, exome, conf, rep, alu = parse_label(toks[0], rare_freq)
         if nsnps > max_snps:
             ncorrect_snp += [0] * (nsnps - max_snps)
             nincorrect_snp += [0] * (nsnps - max_snps)
             ntotal_snp += [0] * (nsnps - max_snps)
             max_snps = nsnps
 
+        rare_id = -1
+        if nsnps == 1:
+            if nrare == 1:
+                rare_id = 1
+            else:
+                rare_id = 0
+
+        '''
         if nrare > max_rare:
             ncorrect_rare += [0] * (nrare - max_rare)
             nincorrect_rare += [0] * (nrare - max_rare)
             ntotal_rare += [0] * (nrare - max_rare)
             max_rare = nrare
+        '''
 
         if ndel > max_del:
             ncorrect_del += [0] * (ndel - max_del)
@@ -175,8 +217,17 @@ def go(results_prefix, pct, desc):
             max_del = ndel
 
         ntotal_snp[nsnps] += 1
-        ntotal_rare[nrare] += 1
+        if rare_id >= 0:
+            ntotal_rare[rare_id] += 1
         ntotal_del[ndel] += 1
+        ntotal_exome[exome] += 1
+        ntotal_conf[conf] += 1
+        ntotal_rep[rep] += 1
+        ntotal_alu[alu] += 1
+
+        true_pos = pos_from_mason1(toks[0])
+        if true_pos >= cent_bounds[0] and true_pos < cent_bounds[1]:
+            ntotal_cent += 1
 
         if toks[1] == '4':
             continue
@@ -185,14 +236,36 @@ def go(results_prefix, pct, desc):
             #print(ln + '\tZC:i:1')
             ncorrect += 1
             ncorrect_snp[nsnps] += 1
-            ncorrect_rare[nrare] += 1
+            if rare_id >= 0:
+                ncorrect_rare[rare_id] += 1
             ncorrect_del[ndel] += 1
+            ncorrect_exome[exome] += 1
+            ncorrect_conf[conf] += 1
+            ncorrect_rep[rep] += 1
+            ncorrect_alu[alu] += 1
+            if true_pos >= cent_bounds[0] and true_pos < cent_bounds[1]:
+                ncorrect_cent += 1
         else:
             #print(ln + '\tZC:i:0')
             nincorrect += 1
+            #if nsnps == 0:
+            #    f_incorrect0.write(ln+'\n')
+            #elif nsnps == 1:
+            #    f_incorrect1.write(ln+'\n')
+
             nincorrect_snp[nsnps] += 1
-            nincorrect_rare[nrare] += 1
+            if rare_id >= 0:
+                nincorrect_rare[rare_id] += 1
             nincorrect_del[ndel] += 1
+            nincorrect_exome[exome] += 1
+            nincorrect_conf[conf] += 1
+            nincorrect_rep[rep] += 1
+            nincorrect_alu[alu] += 1
+            if true_pos >= cent_bounds[0] and true_pos < cent_bounds[1]:
+                nincorrect_cent += 1
+
+    #f_incorrect0.close()
+    #f_incorrect1.close()
 
     aligned = 100 * float(ncorrect + nincorrect) / ntotal
     correct = 100 * float(ncorrect) / (ncorrect + nincorrect)
@@ -216,7 +289,7 @@ def go(results_prefix, pct, desc):
                 f.write('%s\t%d\t%d\t%s\t%f\t%f\t%f\n' % (pct, i, tot, desc, aligned, correct, overall))
 
     with open(results_prefix+'.strat_rare.tsv', 'a') as f:
-        for i in range(max_rare+1):
+        for i in range(2):
             tot = ntotal_rare[i]
             cor = ncorrect_rare[i]
             inc = nincorrect_rare[i]
@@ -244,6 +317,83 @@ def go(results_prefix, pct, desc):
                     correct = float(cor)/(cor+inc)
 
                 f.write('%s\t%d\t%d\t%s\t%f\t%f\t%f\n' % (pct, i, tot, desc, aligned, correct, overall))
+
+    with open(results_prefix+'.strat_region.tsv', 'a') as f:
+        tot = ntotal
+        cor = ncorrect
+        inc = nincorrect
+        if tot > 0:
+            aligned = float(cor+inc)/tot
+            overall = float(cor)/tot
+            if (cor+inc) == 0:
+                correct = -1
+            else:
+                correct = float(cor)/(cor+inc)
+            f.write('%s\t%s\t%d\t%s\t%f\t%f\t%f\n' % (pct, 'Total', tot, desc, aligned, correct, overall))
+
+        i = 1
+        tot = ntotal_exome[i]
+        cor = ncorrect_exome[i]
+        inc = nincorrect_exome[i]
+        if tot > 0:
+            aligned = float(cor+inc)/tot
+            overall = float(cor)/tot
+            if (cor+inc) == 0:
+                correct = -1
+            else:
+                correct = float(cor)/(cor+inc)
+            f.write('%s\t%s\t%d\t%s\t%f\t%f\t%f\n' % (pct, 'Exome', tot, desc, aligned, correct, overall))
+
+        i = 0
+        tot = ntotal_conf[i]
+        cor = ncorrect_conf[i]
+        inc = nincorrect_conf[i]
+        if tot > 0:
+            aligned = float(cor+inc)/tot
+            overall = float(cor)/tot
+            if (cor+inc) == 0:
+                correct = -1
+            else:
+                correct = float(cor)/(cor+inc)
+            f.write('%s\t%s\t%d\t%s\t%f\t%f\t%f\n' % (pct, 'NonConf', tot, desc, aligned, correct, overall))
+
+        i = 1
+        tot = ntotal_rep[i]
+        cor = ncorrect_rep[i]
+        inc = nincorrect_rep[i]
+        if tot > 0:
+            aligned = float(cor+inc)/tot
+            overall = float(cor)/tot
+            if (cor+inc) == 0:
+                correct = -1
+            else:
+                correct = float(cor)/(cor+inc)
+            f.write('%s\t%s\t%d\t%s\t%f\t%f\t%f\n' % (pct, 'Rep', tot, desc, aligned, correct, overall))
+
+        i = 1
+        tot = ntotal_alu[i]
+        cor = ncorrect_alu[i]
+        inc = nincorrect_alu[i]
+        if tot > 0:
+            aligned = float(cor+inc)/tot
+            overall = float(cor)/tot
+            if (cor+inc) == 0:
+                correct = -1
+            else:
+                correct = float(cor)/(cor+inc)
+            f.write('%s\t%s\t%d\t%s\t%f\t%f\t%f\n' % (pct, 'Alu', tot, desc, aligned, correct, overall))
+
+        tot = ntotal_cent
+        cor = ncorrect_cent
+        inc = nincorrect_cent
+        if tot > 0:
+            aligned = float(cor+inc)/tot
+            overall = float(cor)/tot
+            if (cor+inc) == 0:
+                correct = -1
+            else:
+                correct = float(cor)/(cor+inc)
+            f.write('%s\t%s\t%d\t%s\t%f\t%f\t%f\n' % (pct, 'Cent', tot, desc, aligned, correct, overall))
 
 if __name__ == '__main__':
     results_prefix = sys.argv[1]

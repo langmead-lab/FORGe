@@ -2,11 +2,22 @@
 
 import sys
 import argparse
+import bisect
 
 # Update a genome with a set of SNPs and write to a new file
 
 
 def write_snps(snps, locs, outfile):
+    chrom_start = dict()
+    curr_chr = None
+    for i in range(len(locs)):
+        l = locs[i]
+        if not l[0] == curr_chr:
+            if l[0] in chrom_start:
+                print('Error! Reads are not sorted!')
+            chrom_start[l[0]] = i
+            curr_chr = l[0]
+
     f_out = open(outfile, 'w')
 
     last_loc = None
@@ -15,10 +26,15 @@ def write_snps(snps, locs, outfile):
     skipped_dels = 0
     skipped_ins = 0
 
+    curr_chr = None
     curr_id = 0
     num_alts = 0
     count_added = 0
     num_target = len(locs)
+    found_snps = [0] * num_target
+
+    freqs = dict()
+    min_freq = 1
     with open(snps, 'r') as f:
         num_lines = 0
         for line in f:
@@ -27,16 +43,27 @@ def write_snps(snps, locs, outfile):
             chrom = row[0]
             loc = int(row[1])
 
+            if not chrom == curr_chr:
+                curr_id = chrom_start[chrom]
+                curr_chr = chrom
+
             while curr_id < num_target and loc > locs[curr_id][1]:
                 curr_id += 1
                 num_alts = 0
 
-            if curr_id == num_target:
-                break
+            if curr_id < num_target and loc == locs[curr_id][1]:
+                found_snps[curr_id] = 1
 
-            if loc == locs[curr_id][1]:
                 orig = row[2]
                 alt = row[3]
+
+                freq = float(row[4])
+                if freq in freqs:
+                    freqs[freq] += 1
+                else:
+                    freqs[freq] = 1
+                if freq < min_freq:
+                    min_freq = freq
 
                 # Convert locations from 1-indexed to 0-indexed
                 if len(orig) == 1 and len(alt) == 1:
@@ -60,14 +87,17 @@ def write_snps(snps, locs, outfile):
                 last_loc = loc
                 num_alts += 1
 
-            elif chrom > locs[curr_id][0] or (chrom == locs[curr_id][0] and loc > locs[curr_id][1]):
-                print('Couldn\'t find %s, %d!' % (locs[curr_id][0], locs[curr_id][1]))
-                print('%s, %d' % (chrom, loc))
-                exit()
+            #elif chrom > locs[curr_id][0] or (chrom == locs[curr_id][0] and loc > locs[curr_id][1]):
+            #    print('Couldn\'t find %s, %d!' % (locs[curr_id][0], locs[curr_id][1]))
+            #    print('%s, %d' % (chrom, loc))
+            #    exit()
 
     f_out.close()
     print('Skipped %d deletions, %d insertions' % (skipped_dels, skipped_ins))
     print('Found %d / %d target SNPs' % (unique_count, num_target))
+
+    #print(min_freq)
+    #print(', '.join([str(f)+': '+str(freqs[f]) for f in sorted(freqs.keys())]))
 
 def read_sorted(sorted_snps, pct):
     with open(sorted_snps, 'r') as f:
