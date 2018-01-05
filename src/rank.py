@@ -535,7 +535,7 @@ if __name__ == '__main__':
     parser.add_argument('--phasing', type=str, required=False,
         help="Path to file containing phasing information for each individual")
     parser.add_argument('--output', type=str, required=False,
-        help="Path to file to write output ranking to. Default: 'ordered.txt'"
+        help="Path to file to write output ranking to. Default: 'ordered.txt'")
 
 
     args = parser.parse_args(sys.argv[1:])
