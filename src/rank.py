@@ -28,7 +28,7 @@ class VarRanker:
         if phasing:
             self.hap_parser = io.HaplotypeParser(phasing)
 
-        self.max_v_in_window = 15
+        self.max_v_in_window = 35
 
         self.debug = debug
 
@@ -47,7 +47,7 @@ class VarRanker:
         variants = self.variants
 
         # Average probability (weighted by genome length) of a specific read from the linear genome being chosen 
-        total_prob_ref = 0 #sum(self.chrom_lens.values())
+        total_prob_ref = 0
         count_ref = 0
 
         # Average probability (weighted by genome length) of a specific read from the added pseudocontigs being chosen 
@@ -62,6 +62,7 @@ class VarRanker:
 
         var_i = 0
         amb = 0.0
+        last_i, last_j, last_pref, last_added = -1, -1, -1, -1
         for chrom, seq in self.genome.items():
             print('Processing chrom %s' % chrom)
             num_reads = self.chrom_lens[chrom] - r + 1
@@ -70,6 +71,8 @@ class VarRanker:
                 read = seq[i:i+r]
                 if 'N' in read or 'M' in read or 'R' in read:
                     continue
+
+                #total_prob_ref += 1
 
                 # Set [var_i, var_j) to the range of variants contained in the current read
                 while var_i < num_v and variants[var_i].chrom == chrom and variants[var_i].pos < i:
@@ -82,36 +85,57 @@ class VarRanker:
                 if num_vars == 0:
                     total_prob_ref += 1
                     continue
-                elif num_vars > self.max_v_in_window:
-                    num_vars = self.max_v_in_window
-                    var_j = var_i + num_vars
 
                 '''
+                counts = [variants[n].num_alts for n in range(var_i, var_j)]
+                p = 1 - self.prob_read(variants, range(var_i, var_j), [0]*num_vars)
+                total_prob_ref -= p
+                total_prob_added += p
+                num_pcs = 1
+                for c in range(var_i, var_j):
+                    num_pcs *= (variants[c].num_alts + 1)
+                count_added += num_pcs-1
+                
+                curr_count_added = 0
+                counts = [variants[n].num_alts for n in range(var_i, var_j)]
+                total_prob_ref2 += self.prob_read(variants, range(var_i, var_j), [0]*num_vars)
+
+                curr_p = self.prob_read(variants, range(var_i, var_j), [0]*num_vars)
+
                 vec = get_next_vector(num_vars, counts, [0]*num_vars)
                 while vec:
-                    #new_read = list(read)
-                    #for v in range(num_vars):
-                    #    if vec[v] > 0:
-                    #        new_read = list() + variants[var_i+v].alts[vec[v]-1] + list()
-
                     p = self.prob_read(variants, range(var_i, var_j), vec)
+                    curr_p += p
                     total_prob_ref -= p
                     total_prob_added += p
                     count_added += 1
+                    curr_count_added += 1
 
                     vec = get_next_vector(num_vars, counts, vec)
+
+                if abs(1 - curr_p) > 0.001:
+                    print('%d (%d - %d)' % (num_vars, var_i, var_j))
+                    print('Total prob: %f' % curr_p)
                 '''
 
-                num_pcs = 1
-                for c in range(var_i, var_j):
-                    num_pcs *= variants[c].num_alts
-                count_added += num_pcs
+                if var_i == last_i and var_j == last_j:
+                    p_ref = last_pref
+                    p_alts = 1 - p_ref
+                    count_added += last_added-1
+                else:
+                    last_added = 1
+                    for c in range(var_i, var_j):
+                        last_added *= (variants[c].num_alts + 1)
+                    count_added += last_added-1
 
-                vec = [0] * num_vars
-                p_ref = self.prob_read(variants, range(var_i, var_j), vec)
-                p_alts = 1 - p_ref
+                    p_ref = self.prob_read_ref(variants, range(var_i, var_j))
+                    p_alts = 1 - p_ref
                 total_prob_ref += p_ref
                 total_prob_added += p_alts
+
+                last_i = var_i
+                last_j = var_j
+                last_pref = p_ref
 
         self.wgt_ref = float(total_prob_ref) / count_ref
         self.wgt_added = float(total_prob_added) / count_added
@@ -172,20 +196,55 @@ class VarRanker:
         #print('%d total pseudocontigs' % total)
         #print('%d total reads' % total_r)
 
-    def prob_read(self, variants, var_ids, vec, debug=False):
+    def prob_read(self, variants, var_ids, vec):
         '''
             Probability that a read contains the allele vector vec
+            Simultaneously computes probabilities for all haplotypes of the given variants to save time
+        '''
+
+        if not self.curr_vars or not (self.curr_vars == var_ids):
+            self.curr_vars = var_ids
+            counts = [variants[v].num_alts for v in var_ids]
+            num_v = len(var_ids)
+            self.counts = counts
+            if self.hap_parser:
+                # Initialize freqs based on population haplotype data
+                self.freqs = self.hap_parser.get_freqs(var_ids, counts)
+            else:
+                # Inititalize freqs based on independently-assumed allele frequencies
+                num_vecs = 1
+                for c in counts:
+                    num_vecs *= (c+1)
+                freqs = [0] * num_vecs
+                vec = [0] * num_v
+                while vec:
+                    p = 1
+                    for i in range(num_v):
+                        if vec[i]:
+                            p *= variants[var_ids[i]].probs[vec[i]-1]
+                        else:
+                            p *= (1 - sum(variants[var_ids[i]].probs))
+                    self.freqs[vec_to_id(vec, counts)] = p
+                    v = get_next_vector(num_v, counts, v)
+
+        f = self.freqs[vec_to_id(vec, self.counts)]
+        return f
+
+    def prob_read_ref(self, variants, var_ids):
+        '''
+            Probability that a read is from the reference genome, plus-one smoothed
+            Faster than prob_read() when other haplotype probs are unneeded
         '''
 
         if self.hap_parser:
-            if not self.curr_vars or not (self.curr_vars == var_ids):
-                self.curr_vars = var_ids
-                self.counts = [variants[v].num_alts for v in var_ids]
-                self.freqs = self.hap_parser.get_freqs(var_ids, self.counts)
-
-        f = self.freqs[vec_to_id(vec, self.counts)]
-
-        return f
+            self.curr_vars = var_ids
+            self.counts = [variants[v].num_alts for v in var_ids]
+            return self.hap_parser.get_ref_freq(var_ids, self.counts)
+        else:
+            p = 1
+            for i in range(len(var_ids)):
+                p *= (1 - sum(variants[var_ids[i]].probs))
+            return p
 
     def rank(self, method, out_file):
         ordered = None
@@ -206,23 +265,6 @@ class VarRanker:
                 f.write('\t'.join([self.variants[i].chrom + ',' + str(self.variants[i].pos+1) for i in ordered_blowup]))
 
     def rank_ambiguity(self, threshold=0.5):
-
-        '''
-        import cProfile
-        import pstats
-        import io
-        pr = cProfile.Profile()
-        pr.enable()
-        print('Computing avg read prob')
-        self.avg_read_prob()
-        pr.disable()
-        s = io.StringIO()
-        sortby = 'tottime'
-        ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
-        ps.print_stats(30)
-        print(s.getvalue())
-        exit()
-        '''        
 
         print('Counting kmers in ref')
         #time1 = time.time()
@@ -318,8 +360,8 @@ class VarRanker:
         while first_var+k < self.num_v and self.variants[first_var+k].chrom == chrom and self.variants[first_var+k].pos < pos+r:
             k += 1
 
-        if k > 14:
-            sys.stdout.write('Processing variant %d with %d neighbors' % (first_var, k))
+        #if k > 14:
+        #    sys.stdout.write('Processing variant %d with %d neighbors' % (first_var, k))
 
         if k > self.max_v_in_window:
             alt_freqs = [(sum(self.variants[i+j].probs), j) for j in range(1, k)]
@@ -333,7 +375,7 @@ class VarRanker:
         while pseudocontig:
             vec = it.curr_vec
 
-            p = self.prob_read(self.variants, ids, vec, debug=True)
+            p = self.prob_read(self.variants, ids, vec)
             for i in range(len(pseudocontig) - self.r + 1):
                 mer = jellyfish.MerDNA(pseudocontig[i:i+r])
                 mer.canonicalize()

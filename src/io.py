@@ -122,6 +122,28 @@ class HaplotypeParser:
         self.indiv_chunk_size = 100000
         self.chunk_offset = 0 # location in file to seek for start of next chunk
 
+    def get_ref_freq(self, var_ids, counts):
+        '''
+            Return the frequency for the reference haplotype overlapping the given alleles
+        '''
+        
+        if (not self.indiv_chunk_end) or (var_ids[-1] >= self.indiv_chunk_end):
+            self.read_next_chunk(var_ids[0], var_ids[-1])
+
+        num_vecs = 1
+        for c in counts:
+            num_vecs *= (c+1)
+
+        # Plus-one smooth
+        ref_count = 1
+        total_count = min(num_vecs, 256) # Limit on plus-one smoothing for large blowup regions
+
+        for i in range(self.numH):
+            total_count += 1
+            if all(self.haplotypes[j-self.indiv_chunk_start][i] == 0 for j in var_ids):
+                ref_count += 1
+        return float(ref_count) / total_count 
+
     def get_freqs(self, var_ids, counts):
         '''
             Return an array containing the smoothed frequency for each combination of alleles among the SNPs given
@@ -192,7 +214,11 @@ class HaplotypeParser:
             for i in range(prev_lines):
                 haplotypes[i] = self.haplotypes[prev_chunk_start + i]
             for i in range(prev_lines, prev_lines+self.indiv_chunk_size):
-                haplotypes[i] = [int(allele) for allele in f.readline().rstrip().split(',')]
+                line = f.readline()
+                if line:
+                    haplotypes[i] = [int(allele) for allele in line.rstrip().split(',')]
+                else:
+                    break
 
             self.chunk_offset = f.tell()
             self.indiv_chunk_start = min(min_snp, self.indiv_chunk_end)
