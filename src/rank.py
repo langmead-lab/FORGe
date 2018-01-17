@@ -28,7 +28,7 @@ class VarRanker:
         if phasing:
             self.hap_parser = io.HaplotypeParser(phasing)
 
-        self.max_v_in_window = 35
+        self.max_v_in_window = 15
 
         self.debug = debug
 
@@ -41,6 +41,9 @@ class VarRanker:
         self.curr_vars = None
 
     def avg_read_prob(self):
+        self.wgt_ref = 0.778096
+        self.wgt_added = 0.002113
+
         if self.wgt_ref and self.wgt_added:
             return
 
@@ -124,7 +127,7 @@ class VarRanker:
                     count_added += last_added-1
                 else:
                     last_added = 1
-                    for c in range(var_i, var_j):
+                    for c in range(var_i, min(var_j, var_i+self.max_v_in_window)):
                         last_added *= (variants[c].num_alts + 1)
                     count_added += last_added-1
 
@@ -175,7 +178,7 @@ class VarRanker:
                 k += 1
 
             if k > self.max_v_in_window:
-                alt_freqs = [(sum(self.variants[i+j].probs), j) for j in range(1, k)]
+                alt_freqs = [(sum(self.variants[i+j].probs), i+j) for j in range(1, k)]
                 ids = [f[1] for f in sorted(alt_freqs, reverse=True)[:self.max_v_in_window-1]]
                 it = PseudocontigIterator(self.genome[chrom], [self.variants[i]]+[self.variants[v] for v in ids], self.r)
             else:
@@ -364,8 +367,8 @@ class VarRanker:
         #    sys.stdout.write('Processing variant %d with %d neighbors' % (first_var, k))
 
         if k > self.max_v_in_window:
-            alt_freqs = [(sum(self.variants[i+j].probs), j) for j in range(1, k)]
-            ids = [i] + [f[1] for f in sorted(alt_freqs, reverse=True)[:self.max_v_in_window-1]]
+            alt_freqs = [(sum(self.variants[first_var+j].probs), first_var+j) for j in range(1, k)]
+            ids = [first_var] + [f[1] for f in sorted(alt_freqs, reverse=True)[:self.max_v_in_window-1]]
             it = PseudocontigIterator(self.genome[chrom], [self.variants[v] for v in ids], self.r)
         else:
             ids = range(first_var, first_var+k)
@@ -402,15 +405,15 @@ class VarRanker:
                 # Average relative probability of this read's other mappings
                 avg_wgt = c_linear * self.wgt_ref + (c_added-1) * self.wgt_added
                 amb_wgt = (p - avg_wgt) / (c_total)
-                for j in range(k):
+                #for j in range(k):
+                #    if vec[j]:
+                #        #amb_added += p - (p / float(c_total))
+                #        var_ambs[first_var+j] -= amb_wgt
+                for j in range(len(ids)):
                     if vec[j]:
-                        #amb_added += p - (p / float(c_total))
-                        var_ambs[first_var+j] -= amb_wgt
+                        var_ambs[ids[j]] -= amb_wgt
 
             pseudocontig = it.next()
-
-        if k > 14:
-            print('Done')
 
     def rank_pop_cov(self, with_blowup=False, threshold=0.5):
         if with_blowup:
