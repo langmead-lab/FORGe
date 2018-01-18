@@ -15,7 +15,7 @@ import time
 VERSION = '0.0.1'
 
 class VarRanker:
-    def __init__(self, genome, variants, r, phasing, debug=False):
+    def __init__(self, genome, variants, r, phasing, max_v):
         self.genome = genome
         self.chrom_lens = dict()
         for chrom, seq in genome.items():
@@ -28,9 +28,7 @@ class VarRanker:
         if phasing:
             self.hap_parser = io.HaplotypeParser(phasing)
 
-        self.max_v_in_window = 15
-
-        self.debug = debug
+        self.max_v_in_window = max_v
 
         self.h_ref = None
         self.h_added = None
@@ -41,8 +39,8 @@ class VarRanker:
         self.curr_vars = None
 
     def avg_read_prob(self):
-        self.wgt_ref = 0.778096
-        self.wgt_added = 0.002113
+        #self.wgt_ref = 0.778096
+        #self.wgt_added = 0.002113
 
         if self.wgt_ref and self.wgt_added:
             return
@@ -472,10 +470,6 @@ class VarRanker:
             lower_tier = new_lower[:]
 
         while upper_tier:
-            if self.debug:
-                tier_num += 1
-                print('Processing tier %d (> %f), %d SNPs (%d remaining)' % (tier_num, threshold, len(upper_tier), len(lower_tier)))
-
             upper_tier.sort(key=lambda x:(-x[0], x[1]))
 
             # Maps id in self.variants to id in upper/lower tier list
@@ -548,12 +542,16 @@ def go(args):
         o = args.output
     else:
         o = 'ordered.txt'
+    if args.prune:
+        max_v = args.prune
+    else:
+        max_v = r
 
     genome = io.read_genome(args.reference, args.chrom)
 
     vars = io.parse_1ksnp(args.vars)
 
-    ranker = VarRanker(genome, vars, r, args.phasing)
+    ranker = VarRanker(genome, vars, r, args.phasing, max_v)
     ranker.rank(args.method, o)
 
 
@@ -581,7 +579,8 @@ if __name__ == '__main__':
         help="Path to file containing phasing information for each individual")
     parser.add_argument('--output', type=str, required=False,
         help="Path to file to write output ranking to. Default: 'ordered.txt'")
-
+    parser.add_argument('--prune', type=int, required=False,
+        help='In each window, prune haplotypes by only processing up to this many variants. We recommend including this argument for window sizes over 35.')
 
     args = parser.parse_args(sys.argv[1:])
     go(args)
