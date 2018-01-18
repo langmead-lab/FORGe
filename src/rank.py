@@ -62,7 +62,6 @@ class VarRanker:
         r = self.r
 
         var_i = 0
-        amb = 0.0
         last_i, last_j, last_pref, last_added = -1, -1, -1, -1
         for chrom, seq in self.genome.items():
             print('Processing chrom %s' % chrom)
@@ -255,8 +254,8 @@ class VarRanker:
             ordered = self.rank_pop_cov()
         elif method == 'popcov-blowup':
             ordered = self.rank_pop_cov(True)
-        elif method == 'amb':
-            ordered, ordered_blowup = self.rank_ambiguity()
+        elif method == 'hybrid':
+            ordered, ordered_blowup = self.rank_hybrid()
 
         if ordered:
             with open(out_file, 'w') as f:
@@ -265,7 +264,7 @@ class VarRanker:
             with open(out_file+'.blowup', 'w') as f:
                 f.write('\t'.join([self.variants[i].chrom + ',' + str(self.variants[i].pos+1) for i in ordered_blowup]))
 
-    def rank_ambiguity(self, threshold=0.5):
+    def rank_hybrid(self, threshold=0.5):
 
         print('Counting kmers in ref')
         #time1 = time.time()
@@ -284,38 +283,28 @@ class VarRanker:
         #time4 = time.time()
         #print('Avg prob time: %f m' % ((time4-time3)/60))
 
-        print('Computing ambiguities')
+        print('Computing hybrid scores')
         if self.hap_parser:
             self.hap_parser.reset_chunk()
 
         var_wgts = [0] * self.num_v
-        #for chrom, seq in self.genome.items():
-        #    for var_id in range(self.num_v):
-        #        if self.variants[var_id].chrom == chrom:
-        #            break
-
-        #    for i in range(len(seq) - self.r + 1):
-        #        while var_id < self.num_v and self.variants[var_id].chrom == chrom and self.variants[var_id].pos < i:
-        #            var_id += 1
-        #        if var_id == self.num_v or not self.variants[var_id].chrom == chrom:
-        #            break
-        #        elif self.variants[var_id].pos < i+self.r:
-        #            self.compute_ambiguity(chrom, i, var_id, var_wgts)
 
         for v in range(self.num_v):
             if v % 100000 == 0:
                 print('Processing %d / %d variants' % (v, self.num_v))
-            self.compute_ambiguity(v, var_wgts)
+            self.compute_hybrid(v, var_wgts)
 
-        with open('amb_wgts.txt', 'w') as f_amb:
-            f_amb.write(','.join([str(w) for w in var_wgts]))
+        # Uncomment the following 2 lines to write SNP hybrid scores to an intermediate file
+        #with open('hybrid_wgts.txt', 'w') as f_hybrid:
+        #    f_hybrid.write(','.join([str(w) for w in var_wgts]))
         
-        #with open('amb_wgts.txt', 'r') as f_amb:
-        #    var_wgts = [float(w) for w in f_amb.readline().rstrip().split(',')]
+        # Uncomment the following 2 lines and comment out all of the function above this line to resume computation from an intermediate hybrid scores file
+        #with open('hybrid_wgts.txt', 'r') as f_hybrid:
+        #    var_wgts = [float(w) for w in f_hybrid.readline().rstrip().split(',')]
 
-        var_ambs = [(var_wgts[i], i) for i in range(self.num_v)]
-        var_ambs.sort()
-        ordered = [v[1] for v in var_ambs]
+        var_scores = [(var_wgts[i], i) for i in range(self.num_v)]
+        var_scores.sort()
+        ordered = [v[1] for v in var_scores]
 
         # Compute blowup ranking as well
         upper_tier = []
@@ -348,7 +337,7 @@ class VarRanker:
 
         return ordered, ordered_blowup
 
-    def compute_ambiguity(self, first_var, var_ambs):
+    def compute_hybrid(self, first_var, var_wgts):
         r = self.r
         chrom = self.variants[first_var].chrom
         pos = self.variants[first_var].pos
@@ -402,14 +391,10 @@ class VarRanker:
 
                 # Average relative probability of this read's other mappings
                 avg_wgt = c_linear * self.wgt_ref + (c_added-1) * self.wgt_added
-                amb_wgt = (p - avg_wgt) / (c_total)
-                #for j in range(k):
-                #    if vec[j]:
-                #        #amb_added += p - (p / float(c_total))
-                #        var_ambs[first_var+j] -= amb_wgt
+                hybrid_wgt = (p - avg_wgt) / (c_total)
                 for j in range(len(ids)):
                     if vec[j]:
-                        var_ambs[ids[j]] -= amb_wgt
+                        var_wgts[ids[j]] -= hybrid_wgt
 
             pseudocontig = it.next()
 
@@ -566,7 +551,7 @@ if __name__ == '__main__':
             formatter_class=argparse.RawDescriptionHelpFormatter)
 
     parser.add_argument('--method', type=str, required=True,
-        help='Variant ranking method. Currently supported ranking methods: [popcov | amb | hybrid | blowup | popcov-blowup]')
+        help='Variant ranking method. Currently supported ranking methods: [popcov | popcov-blowup | hybrid]\n\'hybrid\' will produce hybrid ranking files both with and without blowup avoidance,')
     parser.add_argument('--reference', type=str, required=True, 
         help='Path to fasta file containing reference genome')
     parser.add_argument("--vars", type=str, required=True,
@@ -580,7 +565,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=str, required=False,
         help="Path to file to write output ranking to. Default: 'ordered.txt'")
     parser.add_argument('--prune', type=int, required=False,
-        help='In each window, prune haplotypes by only processing up to this many variants. We recommend including this argument for window sizes over 35.')
+        help='In each window, prune haplotypes by only processing up to this many variants. We recommend including this argument when ranking with the hybrid strategy for window sizes over 35.')
 
     args = parser.parse_args(sys.argv[1:])
     go(args)
