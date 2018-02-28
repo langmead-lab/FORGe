@@ -112,6 +112,72 @@ def write_vars(variants, locs, outfile):
     f_out.close()
     print('Found %d / %d target vars' % (unique_count, num_target))
 
+def write_pcs_subset(variants, seen_vars, pcs, prefix):
+    with open(prefix + '.snp', 'w') as f_var:
+        for i in range(len(variants)):
+            v = variants[i]
+            num_alts = sum(seen_vars[i])
+            alt_id = 0
+            for j in range(len(seen_vars[i])):
+                if seen_vars[i][j]:
+                    f_var.write(v.name + '.' + str(alt_id) + '\tsingle\t' + v.chrom + '\t' + str(v.pos) + '\t' + v.alts[j] + '\n')
+
+                    # Replace presence boolean in variant list with alt allele id in file
+                    seen_vars[i][j] = alt_id
+
+                    alt_id += 1
+                else:
+                    seen_vars[i][j] = -1
+
+    with open(prefix + '.haplotype', 'w') as f_pc:
+        pc_id = 0
+        for pc in pcs:
+            i = pc[0]
+            vec = pc[1]
+
+            start = variants[i].pos
+            end = start
+            if seen_vars[i][vec[0]-1] < 0:
+                print('Error! Alternate allele should not be present')
+                exit()
+            names = variants[i].name + '.' + str(seen_vars[i][vec[0]-1])
+            for j in range(1, len(vec)):
+                if vec[j] > 0:
+                    end = variants[j].pos
+                    if seen_vars[i+j][vec[j]-1]:
+                        print('Error! Alternate allele should not be present')
+                        exit()
+                    names = names + ',' + variants[j].name + '.' + str(seen_vars[i+j][vec[j]-1])
+
+            out_row = ['ht'+str(pc_id), variants[i].chrom, str(start), str(end), names]
+            f_pc.write('\t'.join(out_row) + '\n')
+            pc_id += 1
+
+def write_pcs(variants, pcs, prefix):
+    with open(prefix + '.snp', 'w') as f_var:
+        for i in range(len(variants)):
+            v = variants[i]
+            for j in range(v.num_alts):
+                f_var.write(v.name + '.' + str(j) + '\tsingle\t' + v.chrom + '\t' + str(v.pos) + '\t' + v.alts[j] + '\n')
+
+    with open(prefix + '.haplotype', 'w') as f_pc:
+        pc_id = 0
+        for pc in pcs:
+            i = pc[0]
+            vec = pc[1]
+
+            start = variants[i].pos
+            end = start
+            names = variants[i].name + '.' + str(vec[0]-1)
+            for j in range(1, len(vec)):
+                if vec[j] > 0:
+                    end = variants[i+j].pos
+                    names = names + ',' + variants[i+j].name + '.' + str(vec[j]-1)
+
+            out_row = ['ht'+str(pc_id), variants[i].chrom, str(start), str(end), names]
+            f_pc.write('\t'.join(out_row) + '\n')
+            pc_id += 1
+
 class HaplotypeParser:
 
     def __init__(self, filename):
@@ -143,6 +209,23 @@ class HaplotypeParser:
             if all(self.haplotypes[j-self.indiv_chunk_start][i] == 0 for j in var_ids):
                 ref_count += 1
         return float(ref_count) / total_count 
+
+    def get_seen_pcs(self, var_ids, counts):
+        # Return all combinations of alleles that appear in each one individual, where first variant is always alt
+        if (not self.indiv_chunk_end) or (var_ids[-1] >= self.indiv_chunk_end):
+            self.read_next_chunk(var_ids[0], var_ids[-1])
+
+        alleles = dict()
+        for i in range(self.numH):
+            v = [self.haplotypes[j-self.indiv_chunk_start][i] for j in var_ids]
+            if v[0] > 0:
+                id = self.vec_to_id(v, counts)
+                if id in alleles:
+                    alleles[id] += 1
+                else:
+                    alleles[id] = 1
+
+        return [(self.id_to_vec(a, counts), float(c)/self.numH) for a,c in alleles.items()]
 
     def get_freqs(self, var_ids, counts):
         '''
@@ -225,6 +308,26 @@ class HaplotypeParser:
             self.indiv_chunk_end += self.indiv_chunk_size
             self.haplotypes = haplotypes
 
+    def read_full_haps(self, num_v):
+        haps = []
+        with open(self.filename, 'r') as f:
+            numH = len(f.readline().rstrip().split(','))
+            self.numH = numH
+            f.seek(0)
+            for _ in range(self.numH):
+                haps.append([0] * num_v)
+
+            line_id = 0
+            for line in f:
+                print('Reading line %d / %d' % (line_id+1, num_v))
+                row = line.rstrip().split(',')
+                for i in range(numH):
+                    haps[i][line_id] = int(row[i])
+                line_id += 1
+            if not line_id == num_v:
+                print('Warning: Looking for %d variants, only %d lines in phasing file!' % (num_v, line_id))
+        return haps
+
     def reset_chunk(self):
         self.indiv_chunk_start = 0
         self.indiv_chunk_end = 0
@@ -276,5 +379,10 @@ class HaplotypeParser:
 
         return id
 
-
-
+    def id_to_vec(self, id, counts):
+        v = [0] * len(counts)
+        for i in range(len(counts)-1, 0, -1):
+            v[i] = id % (counts[i]+1)
+            id = (id - v[i]) / (counts[i]+1)
+        v[0] = id
+        return v

@@ -25,6 +25,7 @@ class VarRanker:
         self.num_v = len(variants)
         self.r = r
 
+        self.phasing = phasing
         if phasing:
             self.hap_parser = io.HaplotypeParser(phasing)
 
@@ -245,6 +246,140 @@ class VarRanker:
             for i in range(len(var_ids)):
                 p *= (1 - sum(variants[var_ids[i]].probs))
             return p
+
+    def seen_pcs(self, out_prefix):
+        pcs = []
+        with open('temp.txt', 'r') as f:
+            for line in f:
+                row = [int(a) for a in line.rstrip().split('\t')]
+                pcs.append((row[0], row[1:]))
+        io.write_pcs(self.variants, pcs, out_prefix)
+        exit()
+
+        if not self.phasing:
+            print('Phasing file is required to rank pseudocontigs')
+
+        pcs = []
+        with open(self.phasing, 'r') as f:
+            numH = len(f.readline().rstrip().split(','))
+            f.seek(0)
+
+            block_firsts = [-1] * numH
+            # Last alternate allele in block
+            block_lasts = [-1] * numH
+            block_vecs = [None] * numH
+
+            v = 0
+            for line in f:
+                if (v+1) % 100000 == 0:
+                    print('Processing line %d of %d' % (v+1, self.num_v))
+
+                curr_pcs = []
+                row = [int(a) for a in line.rstrip().split(',')]
+                for i in range(numH):
+                    if block_vecs[i]:
+                        if (self.variants[v].pos - self.variants[block_lasts[i]].pos) < self.r:
+                            if row[i]:
+                                block_lasts[i] = v
+                            block_vecs[i].append(row[i])
+                        else:
+                            pc = (block_firsts[i], block_vecs[i])
+                            if not pc in curr_pcs:
+                                curr_pcs.append(pc)
+                            if row[i]:
+                                block_firsts[i] = v
+                                block_lasts[i] = v
+                                block_vecs[i] = [row[i]]    
+                            else:
+                                block_firsts[i] = -1
+                                block_lasts[i] = -1
+                                block_vecs[i] = None
+                    elif row[i]:
+                        block_firsts[i] = v
+                        block_lasts[i] = v
+                        block_vecs[i] = [row[i]]
+                pcs += curr_pcs
+                v += 1
+            curr_pcs = []
+            for i in range(numH):
+                if block_vecs[i]:
+                    pc = (block_firsts[i], block_vecs[i])
+                    if not pc in curr_pcs:
+                        curr_pcs.append(pc)
+            pcs += curr_pcs
+
+        print('Sorting and writing')
+        pcs = sorted(list(pcs))
+        with open('temp.txt', 'w') as f:
+            for pc in pcs:
+                f.write(str(pc[0]) + '\t' + '\t'.join([str(a) for a in pc[1]]) + '\n')
+
+        io.write_pcs(self.variants, pcs, out_prefix)
+
+    def rank_pcs(self, out_prefix, pcts):
+        if not self.hap_parser:
+            print('Phasing file is required to rank pseudocontigs')
+
+        pc_wgts = []
+        
+        print('Computing weights...')
+        #for i in range(self.num_v):
+        for i in range(10):
+            print(i)
+            chrom = self.variants[i].chrom
+            pos = self.variants[i].pos
+
+            # Number of variants in window starting at this one
+            k = 1
+            while i+k < self.num_v and self.variants[i+k].chrom == chrom and self.variants[i+k].pos < pos+self.r:
+                k += 1
+
+            var_ids = range(i, i+k)
+            counts = [self.variants[v].num_alts for v in var_ids]
+
+            # Get allele vectors present in population, where first allele is always alt
+            pcs = self.hap_parser.get_seen_pcs(var_ids, counts)
+
+            start = str(pos+1)
+            for pc in pcs:
+                vec = pc[0]
+                if not vec[0]:
+                    continue
+
+                last_id = k-1
+                while not vec[last_id]:
+                    last_id -= 1
+                nreads = self.r - (self.variants[i+last_id].pos - self.variants[i].pos)
+
+                freq = pc[1]
+                wgt = freq * nreads
+                pc_wgts.append((wgt, i, vec))
+
+        print('Finished calculating weights, sorting...')
+        pc_wgts.sort(reverse=True)
+
+        print('Writing haplotypes...')
+        used_vars = []
+        for v in self.variants:
+            used_vars.append([0] * v.num_alts)
+
+        last_n = 0
+        total_pcs = len(pc_wgts)
+        for pct in pcts:
+            print('Writing %d%% of pseudocontigs' % pct)
+
+            curr_n = int((total_pcs * pct) / 100.0)
+            for pc_id in range(last_n, curr_n):
+                i = pc_wgts[pc_id][1]
+                vec = pc_wgts[pc_id][2]
+                
+                for k in range(len(vec)):
+                    if vec[k] > 0:
+                        used_vars[i+k][vec[k]-1] = 1
+
+            io.write_pcs(self.variants, used_vars, sorted([(p[1],p[2]) for p in pc_wgts[:curr_n]]), out_prefix)
+
+            last_n = curr_n
 
     def rank(self, method, out_file):
         ordered = None
@@ -537,7 +672,10 @@ def go(args):
     vars = io.parse_1ksnp(args.vars)
 
     ranker = VarRanker(genome, vars, r, args.phasing, max_v)
-    ranker.rank(args.method, o)
+    if args.pseudocontigs:
+        ranker.seen_pcs(o)
+    else:
+        ranker.rank(args.method, o)
 
 
 if __name__ == '__main__':
@@ -560,6 +698,7 @@ if __name__ == '__main__':
         help="Name of chromosome from reference genome to process. If not present, process all chromosomes.")
     parser.add_argument('--window-size', type=int,
         help="Radius of window (i.e. max read length) to use. Larger values will take longer. Default: 35")
+    parser.add_argument('--pseudocontigs', action="store_true", help='Rank pseudocontigs rather than SNPs')
     parser.add_argument('--phasing', type=str, required=False,
         help="Path to file containing phasing information for each individual")
     parser.add_argument('--output', type=str, required=False,
