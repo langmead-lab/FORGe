@@ -79,8 +79,11 @@ def go(args):
     genome = io.read_genome(args.reference, None)
     variants = io.parse_1ksnp(args.vars)
 
-    targets = top_vars(variants, args.sorted, args.pct)
-    builder = Builder(genome, targets, r)
+    if args.sorted:
+        targets = top_vars(variants, args.sorted, args.pct)
+        builder = Builder(genome, targets, r)
+    else:
+        builder = Builder(genome, variants, r)
 
     if args.hisat:
         builder.write_hisat(args.hisat)
