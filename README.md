@@ -24,7 +24,7 @@ TODO
 
 `rank.py` takes a linear reference genome fasta, a `1ksnp` variant file and an optional file containing phasing information. The user also specifies a ranking method (popcov, popcov-blowup, or hybrid) and window size.
 
-The user can indicate a specific chromosome to process using (???).  Otherwise the full genome is used. When running the hybrid ranking method for window sizes over ~35, we recommend adding the `--prune` which limits blowup in regions dense with genetic variants. A limit of 15 variants per window performed well in practice.
+The user can indicate a specific chromosome to process using (`--chrom`).  Otherwise the full genome is used. When running the hybrid ranking method for window sizes over ~35, we recommend adding the `--prune` which limits blowup in regions dense with genetic variants. A limit of 15 variants per window performed well in practice.
 
 ## build.py ##
 
