@@ -8,14 +8,14 @@ import sys
 import argparse
 import jellyfish
 import io
-import variant
+import logging
 from util import *
-import time
 
 VERSION = '0.0.1'
 
 class VarRanker:
     def __init__(self, genome, variants, r, phasing, max_v):
+        logging.info('Creating ranker')
         self.genome = genome
         self.chrom_lens = dict()
         for chrom, seq in genome.items():
@@ -40,6 +40,10 @@ class VarRanker:
         self.curr_vars = None
 
     def avg_read_prob(self):
+        logging.info('  Calculating average read probabilities')
+
+        # Uncommenting these saves about 1/3rd of the time
+        
         #self.wgt_ref = 0.778096
         #self.wgt_added = 0.002113
 
@@ -144,6 +148,7 @@ class VarRanker:
         print('Avg probability of added reads:   %f' % self.wgt_added)
 
     def count_kmers_ref(self):
+        logging.info('  Counting reference k-mers')
         if self.h_ref:
             return
 
@@ -157,6 +162,7 @@ class VarRanker:
                 self.h_ref.add(m, 1)
 
     def count_kmers_added(self):
+        logging.info('  Counting augmented k-mers')
         if self.h_added:
             return
 
@@ -317,12 +323,13 @@ class VarRanker:
         io.write_pcs(self.variants, pcs, out_prefix)
 
     def rank_pcs(self, out_prefix, pcts):
+        logging.info('Ranking')
         if not self.hap_parser:
             print('Phasing file is required to rank pseudocontigs')
 
         pc_wgts = []
-        
-        print('Computing weights...')
+
+        logging.info('  Computing weights')
         #for i in range(self.num_v):
         for i in range(10):
             print(i)
@@ -400,25 +407,15 @@ class VarRanker:
                 f.write('\t'.join([self.variants[i].chrom + ',' + str(self.variants[i].pos+1) for i in ordered_blowup]))
 
     def rank_hybrid(self, threshold=0.5):
-
-        print('Counting kmers in ref')
-        #time1 = time.time()
+        """
+        `threshold` for blowup avoidance
+        """
+        logging.info('Hybrid-ranking variants')
         self.count_kmers_ref()
-        #time2 = time.time()
-        #print('Ref counting time: %f m' % ((time2-time1)/60))
-        print('Counting added kmers')
         self.count_kmers_added()
-        #time3 = time.time()
-        #print('Added counting time: %f m' % ((time3-time2)/60))
-
-        print('Finished counting kmers')
-        print('')
-
         self.avg_read_prob()
-        #time4 = time.time()
-        #print('Avg prob time: %f m' % ((time4-time3)/60))
 
-        print('Computing hybrid scores')
+        logging.info('  Computing hybrid scores')
         if self.hap_parser:
             self.hap_parser.reset_chunk()
 
@@ -426,7 +423,7 @@ class VarRanker:
 
         for v in range(self.num_v):
             if v % 100000 == 0:
-                print('Processing %d / %d variants' % (v, self.num_v))
+                logging.info('  Processing %d / %d variants' % (v, self.num_v))
             self.compute_hybrid(v, var_wgts)
 
         # Uncomment the following 2 lines to write SNP hybrid scores to an intermediate file
@@ -437,6 +434,7 @@ class VarRanker:
         #with open('hybrid_wgts.txt', 'r') as f_hybrid:
         #    var_wgts = [float(w) for w in f_hybrid.readline().rstrip().split(',')]
 
+        logging.info('  Sorting')
         var_scores = [(var_wgts[i], i) for i in range(self.num_v)]
         var_scores.sort()
         ordered = [v[1] for v in var_scores]
@@ -446,13 +444,14 @@ class VarRanker:
         lower_tier = []
 
         # Normalize weights to [0.01,1]
+        logging.info('  Normalizing weights')
         var_wgts = [-w for w in var_wgts]
         min_wgt = min(var_wgts)
         range_wgts = max(var_wgts) - min_wgt
         for i in range(self.num_v):
             var_wgts[i] = (var_wgts[i] - min_wgt)*0.99 / range_wgts + 0.01
 
-
+        logging.info('  Blowup re-ranking')
         for i in range(self.num_v):
             wgt = var_wgts[i]
 
@@ -667,8 +666,10 @@ def go(args):
     else:
         max_v = r
 
+    logging.info('Reading genome')
     genome = io.read_genome(args.reference, args.chrom)
 
+    logging.info('Parsing 1ksnp')
     vars = io.parse_1ksnp(args.vars)
 
     ranker = VarRanker(genome, vars, r, args.phasing, max_v)
