@@ -680,8 +680,10 @@ def go(args):
 
 
 if __name__ == '__main__':
-    
-    logging.basicConfig(level=logging.INFO)
+
+    format_str = '%(asctime)s:%(levelname)s:%(message)s'
+    level = logging.INFO
+    logging.basicConfig(format=format_str, datefmt='%m/%d/%y-%H:%M:%S', level=level)
 
     if '--version' in sys.argv:
         print('ERG v' + VERSION)
