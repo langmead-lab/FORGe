@@ -680,6 +680,8 @@ def go(args):
 
 
 if __name__ == '__main__':
+    
+    logging.basicConfig(level=logging.INFO)
 
     if '--version' in sys.argv:
         print('ERG v' + VERSION)
