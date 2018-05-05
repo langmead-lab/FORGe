@@ -1,17 +1,18 @@
 #! /usr/bin/env python2.7
 
-'''
+"""
 Rank a set of variants for inclusion in a graph genome, from highest to lowest priority
-'''
+"""
 
 import sys
 import argparse
-import jellyfish
 import io
 import logging
+import kmer_counter
 from util import *
 
 VERSION = '0.0.1'
+
 
 class VarRanker:
     def __init__(self, genome, variants, r, phasing, max_v):
@@ -153,24 +154,16 @@ class VarRanker:
             return
 
         # Create new Jellyfish counter and count all kmers in reference genome
-        jellyfish.MerDNA.k(self.r)
-        self.h_ref = jellyfish.HashCounter(1024, 5)
-
+        self.h_ref = kmer_counter.JellyfishKmerCounter(self.r)
         for chrom in self.genome.values():
-            mers = jellyfish.string_canonicals(chrom)
-            for m in mers:
-                self.h_ref.add(m, 1)
+            self.h_ref.add(chrom)
 
     def count_kmers_added(self):
         logging.info('  Counting augmented k-mers')
         if self.h_added:
             return
 
-        total = 0
-        total_r = 0
-
-        jellyfish.MerDNA.k(self.r)
-        self.h_added = jellyfish.HashCounter(1024, 5)
+        self.h_added = kmer_counter.JellyfishKmerCounter(self.r)
 
         for i in range(self.num_v):
             chrom = self.variants[i].chrom
@@ -190,14 +183,7 @@ class VarRanker:
 
             pseudocontig = it.next()
             while pseudocontig:
-                # Add to jellyfish
-                mers = jellyfish.string_canonicals(pseudocontig)
-                for m in mers:
-                    self.h_added.add(m, 1)
-
-                #total += 1
-                #total_r += len(pseudocontig) - self.r + 1
-
+                self.h_added.add(pseudocontig)
                 pseudocontig = it.next()
 
         #print('%d total pseudocontigs' % total)
@@ -484,9 +470,6 @@ class VarRanker:
         while first_var+k < self.num_v and self.variants[first_var+k].chrom == chrom and self.variants[first_var+k].pos < pos+r:
             k += 1
 
-        #if k > 14:
-        #    sys.stdout.write('Processing variant %d with %d neighbors' % (first_var, k))
-
         if k > self.max_v_in_window:
             alt_freqs = [(sum(self.variants[first_var+j].probs), first_var+j) for j in range(1, k)]
             ids = [first_var] + [f[1] for f in sorted(alt_freqs, reverse=True)[:self.max_v_in_window-1]]
@@ -500,31 +483,19 @@ class VarRanker:
             vec = it.curr_vec
 
             p = self.prob_read(self.variants, ids, vec)
-            for i in range(len(pseudocontig) - self.r + 1):
-                mer = jellyfish.MerDNA(pseudocontig[i:i+r])
-                mer.canonicalize()
-                c_linear = self.h_ref[mer]
-                if not c_linear:
-                    c_linear = 0
-                c_added = self.h_added[mer]
-                if not c_added:
-                    c_added = 0
-                    if c_added == 0:
-                        print('Error! Read %s from added pseudocontigs could not be found (SNPs %d - %d)' % (pseudocontig[i:i+r], first_var, first_var+k))
-                        for j in range(first_var, first_var+k):
-                            print('%s: %d, %s --> %s' % (self.variants[j].chrom, self.variants[j].pos, self.variants[j].orig, ','.join(self.variants[j].alts)))
-                        exit()
-                c_total = c_linear + c_added
-
-                if c_total == 0:
-                    print('Variants %d -%d / %d' % (first_var, first_var+k-1, self.num_v))
-                    print('Vector:       ' + str(vec))
-                    print('Pseudocontig: ' + str(pseudocontig))
-                    print('Read:         ' + str(pseudocontig[i:i+r]))
+            c_refs = self.h_ref.query(pseudocontig)
+            c_augs = self.h_added.query(pseudocontig)
+            for i, count_pair in enumerate(zip(c_refs, c_augs)):
+                c_ref, c_aug = count_pair
+                if c_aug == 0:
+                    print('Error! Read %s from added pseudocontigs could not be found (SNPs %d - %d)' % (pseudocontig[i:i+r], first_var, first_var+k))
+                    for j in range(first_var, first_var+k):
+                        print('%s: %d, %s --> %s' % (self.variants[j].chrom, self.variants[j].pos, self.variants[j].orig, ','.join(self.variants[j].alts)))
                     exit()
+                c_total = c_ref + c_aug
 
                 # Average relative probability of this read's other mappings
-                avg_wgt = c_linear * self.wgt_ref + (c_added-1) * self.wgt_added
+                avg_wgt = c_ref * self.wgt_ref + (c_aug-1) * self.wgt_added
                 hybrid_wgt = (p - avg_wgt) / (c_total)
                 for j in range(len(ids)):
                     if vec[j]:
