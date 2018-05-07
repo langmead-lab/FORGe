@@ -5,6 +5,7 @@ Interfaces to various k-mer counters
 """
 
 import jellyfish
+import squeakr_query
 
 
 class JellyfishKmerCounter(object):
@@ -28,11 +29,14 @@ class JellyfishKmerCounter(object):
 
 
 class SqueakrKmerCounter(object):
-    def __init__(self, r):
-        pass
+    def __init__(self, r, qbits, seed=777, create_local=False):
+        self.r = r
+        self.qbits = qbits
+        self.seed = seed
+        self.db = squeakr_query.cqf_new_db(r, qbits, seed, create_local=create_local)
 
     def add_string(self, s):
-        pass
+        squeakr_query.cqf_injest(self.db, s)
 
     def query(self, s):
-        pass
+        return squeakr_query.cqf_query(self.db, s)
