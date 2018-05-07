@@ -8,7 +8,6 @@ import sys
 import argparse
 
 import io
-import variant
 from util import *
 
 VERSION = '0.0.1'
