@@ -6,7 +6,7 @@ Rank a set of variants for inclusion in a graph genome, from highest to lowest p
 
 import sys
 import argparse
-import io
+from iohelp import HaplotypeParser, write_pcs, read_genome, parse_1ksnp
 import logging
 import kmer_counter
 from util import *
@@ -28,7 +28,7 @@ class VarRanker:
 
         self.phasing = phasing
         if phasing:
-            self.hap_parser = io.HaplotypeParser(phasing)
+            self.hap_parser = HaplotypeParser(phasing)
 
         self.max_v_in_window = max_v
 
@@ -245,7 +245,7 @@ class VarRanker:
             for line in f:
                 row = [int(a) for a in line.rstrip().split('\t')]
                 pcs.append((row[0], row[1:]))
-        io.write_pcs(self.variants, pcs, out_prefix)
+        write_pcs(self.variants, pcs, out_prefix)
         exit()
 
         if not self.phasing:
@@ -306,7 +306,7 @@ class VarRanker:
             for pc in pcs:
                 f.write(str(pc[0]) + '\t' + '\t'.join([str(a) for a in pc[1]]) + '\n')
 
-        io.write_pcs(self.variants, pcs, out_prefix)
+        write_pcs(self.variants, pcs, out_prefix)
 
     def rank_pcs(self, out_prefix, pcts):
         logging.info('Ranking')
@@ -365,12 +365,11 @@ class VarRanker:
             for pc_id in range(last_n, curr_n):
                 i = pc_wgts[pc_id][1]
                 vec = pc_wgts[pc_id][2]
-                
                 for k in range(len(vec)):
                     if vec[k] > 0:
                         used_vars[i+k][vec[k]-1] = 1
 
-            io.write_pcs(self.variants, used_vars, sorted([(p[1],p[2]) for p in pc_wgts[:curr_n]]), out_prefix)
+            write_pcs(self.variants, used_vars, sorted([(p[1],p[2]) for p in pc_wgts[:curr_n]]), out_prefix)
 
             last_n = curr_n
 
@@ -638,10 +637,10 @@ def go(args):
         max_v = r
 
     logging.info('Reading genome')
-    genome = io.read_genome(args.reference, args.chrom)
+    genome = read_genome(args.reference, args.chrom)
 
     logging.info('Parsing 1ksnp')
-    vars = io.parse_1ksnp(args.vars)
+    vars = parse_1ksnp(args.vars)
 
     ranker = VarRanker(genome, vars, r, args.phasing, max_v)
     if args.pseudocontigs:

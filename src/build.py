@@ -1,16 +1,17 @@
 #! /usr/bin/env python2.7
 
-'''
+"""
 Build a graph genome from a linear reference genome and set of variants
-'''
+"""
 
 import sys
 import argparse
 
-import io
+from iohelp import write_vars, read_genome, parse_1ksnp
 from util import *
 
 VERSION = '0.0.1'
+
 
 class Builder:
     def __init__(self, genome, vars, r):
@@ -20,7 +21,7 @@ class Builder:
         self.r = r
 
     def write_hisat(self, filename):
-        io.write_vars(filename)
+        write_vars(filename)
 
     def write_erg(self, filename):
         print('Writing ERG')
@@ -69,14 +70,15 @@ def top_vars(variants, ordered, pct):
     print('Found %d / %d variants' % (len(selected), len(targets)))
     return selected
 
+
 def go(args):
     if args.window_size:
         r = args.window_size
     else:
         r = 35
 
-    genome = io.read_genome(args.reference, None)
-    variants = io.parse_1ksnp(args.vars)
+    genome = read_genome(args.reference, None)
+    variants = parse_1ksnp(args.vars)
 
     if args.sorted:
         targets = top_vars(variants, args.sorted, args.pct)
@@ -88,6 +90,7 @@ def go(args):
         builder.write_hisat(args.hisat)
     if args.erg:
         builder.write_erg(args.erg)
+
 
 if __name__ == '__main__':
     if '--version' in sys.argv:

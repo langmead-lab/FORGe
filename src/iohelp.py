@@ -1,6 +1,5 @@
 #! /usr/bin/env python2.7
 
-from util import *
 import variant
 
 '''
