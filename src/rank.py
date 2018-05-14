@@ -22,21 +22,14 @@ class VarRanker:
         self.chrom_lens = dict()
         for chrom, seq in genome.items():
             self.chrom_lens[chrom] = len(seq)
-
         self.variants = variants
         self.num_v = sum(map(len, variants.values()))
         self.r = r
-
         self.phasing = phasing
         self.hap_parser = HaplotypeParser(phasing) if phasing else None
         self.max_v_in_window = max_v
-
-        self.h_ref = None
-        self.h_added = None
-
-        self.wgt_ref = None
-        self.wgt_added = None
-
+        self.h_ref = self.h_added = None
+        self.wgt_ref = self.wgt_added = None
         self.curr_vars = None
         self.freqs = {}
 
@@ -158,7 +151,7 @@ class VarRanker:
             self.h_ref.add(chrom)
             n_pcs += 1
             tot_pc_len += len(chrom)
-            logging.info('    Processed %d contigs, %d bases' % (n_pcs, tot_pc_len))
+            logging.info('    %d contigs, %d bases' % (n_pcs, tot_pc_len))
 
     def count_kmers_added(self):
         logging.info('  Counting augmented k-mers')
@@ -245,7 +238,6 @@ class VarRanker:
             return p
 
     def rank(self, method, out_file):
-        ordered = None
         ordered_blowup = None
         if method == 'popcov':
             ordered = self.rank_pop_cov()
@@ -253,6 +245,8 @@ class VarRanker:
             ordered = self.rank_pop_cov(True)
         elif method == 'hybrid':
             ordered, ordered_blowup = self.rank_hybrid()
+        else:
+            raise RuntimeError('Bad ordering method: "%s"' % method)
 
         if ordered:
             with open(out_file, 'w') as f:
@@ -287,7 +281,9 @@ class VarRanker:
             for v in range(num_v):
                 if num_v_cum + v >= bar:
                     bar = max(bar + 1, bar*incr)
-                    logging.info('    Processing %d / %d variants' % ((num_v_cum + v), self.num_v))
+                    msofar = (num_v_cum + v)
+                    pct = msofar * 100.0 / self.num_v
+                    logging.info('    %d out of %d variants; %0.3f%% done' % (msofar, self.num_v, pct))
                 self.compute_hybrid(self.genome[chrom], variants, v, var_wgts_chrom)
             for v in range(num_v):
                 var_wgts.append([var_wgts_chrom[v], chrom, variants.poss[v]])
@@ -393,7 +389,9 @@ class VarRanker:
 
     def rank_pop_cov(self, with_blowup=False, threshold=0.5):
         if with_blowup:
+            logging.info('Popcov+-ranking variants')
             upper_tier, lower_tier = [], []
+            logging.info('  Creating initial tiers')
             for chrom, variants in self.variants.items():
                 num_v = len(variants)
                 for i in range(num_v):
@@ -412,8 +410,10 @@ class VarRanker:
                 logging.warning('  Upper tier empty')
             if len(lower_tier) == 0:
                 logging.warning('  Lower tier empty')
+            logging.info('  Applying dynamic re-ranking')
             ordered = self.rank_dynamic_blowup(upper_tier, lower_tier)
         else:
+            logging.info('Popcov-ranking variants')
             # Variant weight is the sum of frequencies of alternate alleles
             var_wgts = []
             for chrom, variants in self.variants.items():
