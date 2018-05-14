@@ -83,6 +83,8 @@ extern "C" {
 
 	void qf_init(QF *qf, uint64_t nslots, uint64_t key_bits, uint64_t value_bits, bool mem, const char *path, uint32_t seed);
 
+	QF *qf_init_simple(uint64_t nslots, uint64_t key_bits, uint64_t value_bits, uint32_t seed);
+
 	void qf_reset(QF *qf);
 
 	void qf_destroy(QF *qf, bool mem);

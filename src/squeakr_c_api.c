@@ -151,19 +151,20 @@ static uint64_t MurmurHash64A(const void * key,
 	return h;
 }
 
-void string_injest(const char *read,
-                   size_t read_len,
-                   struct flush_object *obj,
-                   int get_lock)
+int string_injest(const char *read,
+                  size_t read_len,
+                  struct flush_object *obj,
+                  int get_lock)
 {
 	const uint32_t seed = obj->main_qf->metadata->seed;
 	const __uint128_t range = obj->main_qf->metadata->range;
 	assert(obj->local_qf == NULL || obj->local_qf->metadata->range == range);
 	assert(obj->local_qf == NULL || obj->local_qf->metadata->seed == seed);
 	size_t left_chop = 0;
+	int nadded = 0;
 	do {
 		if (read_len - left_chop < obj->ksize) {
-			return; // start with the next read if length is smaller than K
+			return nadded; // start with the next read if length is smaller than K
 		}
 		uint64_t first = 0;
 		uint64_t first_rev = 0;
@@ -173,7 +174,10 @@ void string_injest(const char *read,
 			uint8_t curr = map_base(read[left_chop + i]);
 			if (curr > DNA_G) { // 'N' is encountered
 				left_chop += (i+1);
-				continue; // BTL: does it properly check if there's <k left?
+				if(read_len - left_chop < obj->ksize) {
+				    return nadded;
+				}
+				continue;
 			}
 			first = first | curr;
 			first = first << 2;
@@ -199,11 +203,11 @@ void string_injest(const char *read,
 				obj->count = 0;
 			}
 		}
-		
+		nadded++;
 		uint64_t next = (first << 2) & BITMASK(2*obj->ksize);
 		uint64_t next_rev = first_rev >> 2;
-		
-		for(uint32_t i=obj->ksize; i < (read_len - left_chop); i++) { //next kmers
+
+		for(uint32_t i=obj->ksize; i + left_chop < read_len; i++) {
 			uint8_t curr = map_base(read[i + left_chop]);
 			if (curr > DNA_G) { // 'N' is encountered
 				left_chop += (i+1);
@@ -216,12 +220,6 @@ void string_injest(const char *read,
 			item = compare_kmers(next, next_rev) ? next : next_rev;
 			item = MurmurHash64A(((void*)&item), sizeof(item), seed);
 			item %= range;
-			
-			/*
-			 * first try and insert in the main QF.
-			 * If lock can't be accuired in the first attempt then
-			 * insert the item in the local QF.
-			 */
 			if (!qf_insert(obj->main_qf, item, 0, 1, get_lock, false)) {
 				qf_insert(obj->local_qf, item, 0, 1, false, false);
 				obj->count++;
@@ -231,10 +229,12 @@ void string_injest(const char *read,
 					obj->count = 0;
 				}
 			}
+			nadded++;
 			next = (next << 2) & BITMASK(2*obj->ksize);
 			next_rev = next_rev >> 2;
 		}
 	} while(false);
+	return nadded;
 }
 
 /**
@@ -289,12 +289,18 @@ int string_query(const char *read_orig,
 		item %= range;
 		uint64_t count = qf_count_key_value(obj->main_qf, item, 0);
 		*cur_count++ = count;
-		assert(cur_count - count_array <= count_array_len);
+		if(cur_count - count_array > count_array_len) {
+			fprintf(stderr, "Wrote off end of count array\n");
+			exit(1);
+		}
 		
 		uint64_t next = (first << 2) & BITMASK(2*obj->ksize);
 		uint64_t next_rev = first_rev >> 2;
 		read += obj->ksize;
-		assert(read_len >= obj->ksize);
+		if(read_len < obj->ksize) {
+			fprintf(stderr, "Query string became too short\n");
+			exit(1);
+		}
 		read_len -= obj->ksize;
 
 		for(uint32_t i = 0; i < read_len; i++) { //next kmers
@@ -317,7 +323,10 @@ int string_query(const char *read_orig,
 			item %= range;
 			count = qf_count_key_value(obj->main_qf, item, 0);
 			*cur_count++ = count;
-			assert(cur_count - count_array <= count_array_len);
+			if(cur_count - count_array > count_array_len) {
+				fprintf(stderr, "Wrote off end of count array\n");
+				exit(1);
+			}
 			next = (next << 2) & BITMASK(2*obj->ksize);
 			next_rev = next_rev >> 2;
 		}

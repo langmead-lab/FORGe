@@ -1,24 +1,27 @@
 #! /usr/bin/env python2.7
 
 import variant
+import logging
+from collections import defaultdict
 
-'''
+"""
 I/O support functions
-'''
+"""
+
 
 def read_genome(filename, target_chrom=None):
     G = dict()
-    seq = None
+    seq = []
     skip = False
 
     with open(filename, 'r') as f:
         for line in f:
             # Skip header line
             if line[0] == '>':
-                if not skip and seq:
-                    G[chrom] = seq
+                if not skip and len(seq) > 0:
+                    G[chrom] = ''.join(seq)
                 chrom = line.rstrip().split(' ')[0][1:]
-                seq = ''
+                seq = []
                 if target_chrom and not chrom == target_chrom:
                     skip = True
                 else:
@@ -26,57 +29,72 @@ def read_genome(filename, target_chrom=None):
                 continue
 
             if not skip:
-                seq += line.rstrip()
-    if not skip and seq:
-        G[chrom] = seq
+                seq.append(line.rstrip())
+    if not skip and len(seq) > 0:
+        G[chrom] = ''.join(seq)
 
     return G
 
 
-def parse_1ksnp(filename, G=None):
-    '''
+def parse_1ksnp(filename, G=None, target_chrom=None):
+    """
         filename: Path to 1ksnp file containing variant information
         G: Genome sequence. If present, count variants inconsistent with G
 
-        Return list of variants
-    '''
+        Chromosome-name-keyed dictionary of VariantSet objects
+    """
 
     # Variant list
-    v = []
+    vardict = defaultdict(variant.VariantSet)
 
-    curr_var = None
+    if target_chrom is not None:
+        target_chrom += '\t'
 
-    # Count of variants that are not consistent with G
-    if G:
-        wrong_count = 0
+    n_var, n_target, n_nontarget = 0, 0, 0
+    curr_name, curr_chr = None, None
+    curr_nalt = 0
+    wrong_count = 0
 
     with open(filename, 'r') as f:
         for line in f:
-            row = line.rstrip().split('\t')
+            if target_chrom is not None:
+                if not line.startswith(target_chrom):
+                    n_nontarget += 1
+                    continue
+                else:
+                    n_target += 1
+            row = line.split('\t')
 
-            if not curr_var:
-                curr_var = variant.Variant(row[7], row[0], int(row[1])-1, row[2], [row[3]], [float(row[4])])
+            if curr_nalt == 0:
+                if curr_chr is not None and row[0] != curr_chr:
+                    logging.info('  Starting chromosome %s; %d variants so far' % (curr_chr, n_var))
+                curr_pos = int(row[1])-1
+                curr_orig = row[2]
+                curr_chr = row[0]
+                vardict[curr_chr].add_var(curr_pos, curr_orig, row[3], float(row[4]))
+                n_var += 1
+                curr_name = row[7]
+                curr_nalt = 1
+                if G and not G[curr_chr][curr_pos:curr_pos + len(curr_orig)] == curr_orig:
+                    wrong_count += 1
             else:
-                if not row[7] == curr_var.name:
-                    print("Error! Couldn't find all alternate alleles for variant %s" % curr_var.name)
-                    exit()
-                curr_var.add_alt(row[3], float(row[4]))
+                if row[7] != curr_name:
+                    raise RuntimeError("Couldn't find all alternate alleles for variant " + curr_name)
+                vardict[curr_chr].add_alt_to_last(row[3], float(row[4]))
+                curr_nalt += 1
 
-            if G and not G[curr_var.chrom][curr_var.pos:curr_var.pos+len(curr_var.orig)] == curr_var.orig:
-                wrong_count += 1
+            if curr_nalt == int(row[6]):
+                curr_var, curr_name = None, None
+                curr_nalt = 0
 
-            if curr_var.num_alts == int(row[6]):
-                v.append(curr_var)
-                curr_var = None
-
-        if curr_var:
-            v.append(curr_var)
+    logging.info('Parsed %d variants from %d chromosomes' % (n_var, len(vardict)))
 
     if G and wrong_count > 0:
-        print('%d / %d variants are inconsistent with the reference genome!' % (wrong_count, len(S)))
+        print('%d / %d variants are inconsistent with the reference genome!' % (wrong_count, n_var))
         exit()
 
-    return v
+    return vardict
+
 
 def write_vars(variants, locs, outfile):
     f_out = open(outfile, 'w')
@@ -111,6 +129,8 @@ def write_vars(variants, locs, outfile):
     f_out.close()
     print('Found %d / %d target vars' % (unique_count, num_target))
 
+# BTL: This won't work since I got rid of Variant.name field
+"""
 def write_pcs_subset(variants, seen_vars, pcs, prefix):
     with open(prefix + '.snp', 'w') as f_var:
         for i in range(len(variants)):
@@ -176,6 +196,7 @@ def write_pcs(variants, pcs, prefix):
             out_row = ['ht'+str(pc_id), variants[i].chrom, str(start), str(end), names]
             f_pc.write('\t'.join(out_row) + '\n')
             pc_id += 1
+"""
 
 class HaplotypeParser:
 

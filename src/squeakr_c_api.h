@@ -20,10 +20,10 @@ struct flush_object {
 /**
  * Injest all the k-mers in a string into a CQF.
  */
-void string_injest(const char *read,
-                   size_t read_len,
-                   struct flush_object *obj,
-                   int get_lock);
+int string_injest(const char *read,
+                  size_t read_len,
+                  struct flush_object *obj,
+                  int get_lock);
 
 /**
  * Populate int array with the counts of all the k-mers in the given string.

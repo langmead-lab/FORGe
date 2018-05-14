@@ -1573,6 +1573,10 @@ inline static void _remove(QF *qf, __uint128_t hash, uint64_t count)
  * Code that uses the above to implement key-value-counter operations. *
  ***********************************************************************/
 
+// nslots is a power of 2 and this must be 2^q
+// key_bits seems to be something like p, so key_remainder_bits becomes r (or r+3?)
+// value_bits gets added in for bits_per_slot
+
 void qf_init(QF *qf, uint64_t nslots, uint64_t key_bits, uint64_t value_bits,
 						 bool mem, const char * path, uint32_t seed)
 {
@@ -1602,9 +1606,9 @@ void qf_init(QF *qf, uint64_t nslots, uint64_t key_bits, uint64_t value_bits,
 #endif
 
 	qf->mem = (qfmem *)calloc(sizeof(qfmem), 1);
-	
+
 	if (mem) {
-		qf->metadata = (qfmetadata *)calloc(sizeof(qfmetadata), 1);
+		qf->metadata = (qfmetadata *)malloc(sizeof(qfmetadata));
 
 		qf->metadata->size = size;
 		qf->metadata->seed = seed;
@@ -1628,6 +1632,7 @@ void qf_init(QF *qf, uint64_t nslots, uint64_t key_bits, uint64_t value_bits,
 		qf->blocks = (qfblock *)calloc(size, 1);
 
 	} else {
+	    printf("NOT allocating mem\n");
 
 		qf->mem->fd = open(path, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
 		if (qf->mem->fd < 0) {
@@ -1676,6 +1681,86 @@ void qf_init(QF *qf, uint64_t nslots, uint64_t key_bits, uint64_t value_bits,
 	qf->mem->wait_times = (wait_time_data* )calloc(qf->metadata->num_locks+1,
 																						sizeof(wait_time_data));
 #endif
+}
+
+QF *qf_init_simple(uint64_t nslots, uint64_t key_bits, uint64_t value_bits, uint32_t seed) {
+	QF *qf = malloc(sizeof(QF));
+	if(qf == NULL) {
+		fprintf(stderr, "Could not allocate qf\n");
+		exit(1);
+	} 
+	uint64_t num_slots, xnslots, nblocks;
+	uint64_t key_remainder_bits, bits_per_slot;
+	uint64_t size;
+
+	assert(popcnt(nslots) == 1); /* nslots must be a power of 2 */
+	num_slots = nslots;
+	assert(popcnt(nslots) == 1); /* nslots must be a power of 2 */
+	xnslots = nslots + 10*sqrt((double)nslots);
+	nblocks = (xnslots + SLOTS_PER_BLOCK - 1) / SLOTS_PER_BLOCK;
+	key_remainder_bits = key_bits;
+	while (nslots > 1) {
+		assert(key_remainder_bits > 0);
+		key_remainder_bits--;
+		nslots >>= 1;
+	}
+
+	bits_per_slot = key_remainder_bits + value_bits;
+	assert (BITS_PER_SLOT == 0 || BITS_PER_SLOT == qf->metadata->bits_per_slot);
+	assert(bits_per_slot > 1);
+#if BITS_PER_SLOT == 8 || BITS_PER_SLOT == 16 || BITS_PER_SLOT == 32 || BITS_PER_SLOT == 64
+	size = nblocks * sizeof(qfblock);
+#else
+	size = nblocks * (sizeof(qfblock) + SLOTS_PER_BLOCK * bits_per_slot / 8);
+#endif
+
+	qf->mem = (qfmem *)calloc(sizeof(qfmem), 1);
+	if(qf->mem == NULL) {
+		fprintf(stderr, "Could not allocate qf->mem\n");
+		exit(1);
+	} 
+	
+	qf->metadata = (qfmetadata *)malloc(sizeof(qfmetadata));
+	if(qf->metadata == NULL) {
+		fprintf(stderr, "Could not allocate qf->metadata\n");
+		exit(1);
+	} 
+
+	qf->metadata->size = size;
+	qf->metadata->seed = seed;
+	qf->metadata->nslots = num_slots;
+	qf->metadata->xnslots = qf->metadata->nslots +
+		10*sqrt((double)qf->metadata->nslots);
+	qf->metadata->key_bits = key_bits;
+	qf->metadata->value_bits = value_bits;
+	qf->metadata->key_remainder_bits = key_remainder_bits;
+	qf->metadata->bits_per_slot = bits_per_slot;
+
+	qf->metadata->range = qf->metadata->nslots;
+	qf->metadata->range <<= qf->metadata->bits_per_slot;
+	qf->metadata->nblocks = (qf->metadata->xnslots + SLOTS_PER_BLOCK - 1) /
+		SLOTS_PER_BLOCK;
+	qf->metadata->nelts = 0;
+	qf->metadata->ndistinct_elts = 0;
+	qf->metadata->noccupied_slots = 0;
+	qf->metadata->num_locks = (qf->metadata->xnslots/NUM_SLOTS_TO_LOCK)+2;
+
+	qf->blocks = (qfblock *)calloc(size, 1);
+	if(qf->blocks == NULL) {
+		fprintf(stderr, "Could not allocate qf->blocks\n");
+		exit(1);
+	} 
+
+	/* initialize all the locks to 0 */
+	qf->mem->metadata_lock = 0;
+	qf->mem->locks = (volatile int *)calloc(qf->metadata->num_locks,
+																					sizeof(volatile int));
+#ifdef LOG_WAIT_TIME
+	qf->mem->wait_times = (wait_time_data* )calloc(qf->metadata->num_locks+1,
+																						sizeof(wait_time_data));
+#endif
+
+	return qf;
 }
 
 /* The caller should call qf_init on the dest QF before calling this function. 

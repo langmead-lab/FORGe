@@ -11,16 +11,6 @@ CQF.  Uses CFFI.  Run squeakr_build.py first.
 from _api import ffi, lib
 
 
-def cqf_new_filter(qbits, seed):
-    """
-    Returns a new counting quotient filter with the given number of quotient
-    bits and the given seed. 
-    """
-    qf = ffi.new('struct quotient_filter*')
-    lib.qf_init(qf, 1 << qbits, qbits+8, 0, True, "", seed)
-    return qf
-
-
 def cqf_new_db(ksize, qbits, seed, create_local=False):
     """
     Returns a new "db" (basically the `flush_object` structure from Squeakr)
@@ -29,20 +19,18 @@ def cqf_new_db(ksize, qbits, seed, create_local=False):
     (i.e. a local CQF) which could be useful in scenarios where a writer is
     running concurrently with other readers or writers.
     """
-    qf = cqf_new_filter(qbits, seed)
-    qf_local = ffi.NULL
+    db = ffi.new('struct flush_object*')
+    db.main_qf = lib.qf_init_simple(1 << qbits, qbits + 8, 0, seed)
+    db.local_qf = ffi.NULL
     if create_local:
-        qf_local = cqf_new_filter(qbits, seed)
-    flush_object = ffi.new('struct flush_object*')
-    flush_object.ksize = ksize
-    flush_object.count = 0
-    flush_object.main_qf = qf
-    flush_object.local_qf = qf_local
-    return flush_object
+        db.local_qf = lib.qf_init_simple(1 << qbits, qbits + 8, 0, seed)
+    db.ksize = ksize
+    db.count = 0
+    return db
 
 
 def cqf_injest(db, s):
-    lib.string_injest(s, len(s), db, 0)
+    return lib.string_injest(s, len(s), db, 0)
 
 
 def cqf_query(db, st):
@@ -64,11 +52,28 @@ if __name__ == '__main__':
     seed = 777
     qbits = 10
     ksize = 4
-    db = cqf_new_db(ksize, qbits, seed, False)
-    to_injest = 'ACGTACGT'
-    lib.string_injest(to_injest, len(to_injest), db, 0)
-    to_query = 'ACGTNACGTNACGT'
-    #           01234567890123
-    results = cqf_query(db, to_query)
-    for i, res in enumerate(results):
-        print((i, res))
+    if False:
+        db = cqf_new_db(ksize, qbits, seed, False)
+        to_injest = 'ACGTACGT'
+        lib.string_injest(to_injest, len(to_injest), db, 0)
+        to_query = 'ACGTNACGTNACGT'
+        #           01234567890123
+        results = cqf_query(db, to_query)
+        #for i, res in enumerate(results):
+        #    print((i, res))
+    else:
+        db = ffi.new('struct flush_object*')
+        db.main_qf = lib.qf_init_simple(1 << qbits, qbits + 8, 0, seed)
+        db.local_qf = ffi.NULL
+        db.ksize = ksize
+        db.count = 0
+
+        to_injest = 'ACGTACGT'
+        lib.string_injest(to_injest, len(to_injest), db, 0)
+
+        to_query = 'ACGTNACGTNACGT'
+        stlen = len(to_query)
+        results_len = stlen - db.ksize + 1
+        results = ffi.new('int64_t[]', results_len)
+        nresults = lib.string_query(to_query, stlen, results, results_len, db)
+        assert nresults == results_len

@@ -4,17 +4,32 @@
 Interfaces to various k-mer counters
 """
 
-import jellyfish
-import squeakr_query
+from __future__ import print_function
+from abc import ABCMeta, abstractmethod
+import squeakr
 
 
-class JellyfishKmerCounter(object):
-    def __init__(self, r, initial_size=1024, bits_per_value=5):
+class KmerCounter(object):
+    __metaclass__ = ABCMeta
+
+    @abstractmethod
+    def add(self, s):
+        pass
+
+    @abstractmethod
+    def query(self, s):
+        pass
+
+
+class JellyfishKmerCounter(KmerCounter):
+    def __init__(self,  name, r, initial_size=1024, bits_per_value=5):
+        import jellyfish
+        self.name = name
         self.r = r
         jellyfish.MerDNA.k(r)
         self.counter = jellyfish.HashCounter(initial_size, bits_per_value)
 
-    def add_string(self, s):
+    def add(self, s):
         """ Add canonicalized version of each k-mer substring """
         for mer in jellyfish.string_canonicals(s):
             self.counter.add(mer, 1)
@@ -28,15 +43,20 @@ class JellyfishKmerCounter(object):
         return res
 
 
-class SqueakrKmerCounter(object):
-    def __init__(self, r, qbits, seed=777, create_local=False):
+class SqueakrKmerCounter(KmerCounter):
+    """
+    What is the size of the CQF?
+    """
+    def __init__(self, name, r, qbits=10, seed=777, create_local=False):
+        self.name = name
         self.r = r
         self.qbits = qbits
         self.seed = seed
-        self.db = squeakr_query.cqf_new_db(r, qbits, seed, create_local=create_local)
+        self.db = squeakr.cqf_new_db(r, qbits, seed, create_local=create_local)
+        self.nadded = 0
 
-    def add_string(self, s):
-        squeakr_query.cqf_injest(self.db, s)
+    def add(self, s):
+        self.nadded += squeakr.cqf_injest(self.db, s)
 
     def query(self, s):
-        return squeakr_query.cqf_query(self.db, s)
+        return squeakr.cqf_query(self.db, s)
