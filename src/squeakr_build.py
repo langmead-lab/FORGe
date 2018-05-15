@@ -17,7 +17,8 @@ ffibuilder.set_source("_api", r"""
     """,
     libraries=[],
     sources=['squeakr_c_api.c', 'threadsafe-gqf/gqf.c'],
-    extra_compile_args=["-std=c99"])
+    # need -std=gnu99 for inline asm & loops w/ variables declared inside
+    extra_compile_args=["-std=gnu99"])
 
 ffibuilder.cdef("""
     struct quotient_filter {
@@ -37,11 +38,12 @@ ffibuilder.cdef("""
         struct flush_object *obj,
         int get_lock);
 
-    int string_query(const char *read,
-                     size_t read_len,
-                     int64_t *count_array,
-                     size_t count_array_len,
-                     struct flush_object *obj);
+    int string_query(
+        const char *read,
+        size_t read_len,
+        int64_t *count_array,
+        size_t count_array_len,
+        struct flush_object *obj);
 
     struct quotient_filter* qf_init_simple(
         uint64_t nslots,
