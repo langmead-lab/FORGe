@@ -16,7 +16,8 @@ ffibuilder.set_source("_api", r"""
     #include "squeakr_c_api.h"
     """,
     libraries=[],
-    sources=['squeakr_c_api.c', 'threadsafe-gqf/gqf.c'])
+    sources=['squeakr_c_api.c', 'threadsafe-gqf/gqf.c'],
+    extra_compile_args=["-std=c99"])
 
 ffibuilder.cdef("""
     struct quotient_filter {
