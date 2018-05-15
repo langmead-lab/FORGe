@@ -27,7 +27,7 @@ class VariantSet:
         intern(orig)
         new_id = len(self.poss)
         assert orig != alt
-        assert prob <= 1.0
+        assert prob <= 1.01
         self.poss.append(pos)
         self.origs.append(orig)
         self.alt1s.append(alt)
@@ -35,6 +35,14 @@ class VariantSet:
         self.altrests.append(None)
         self.probrests.append(None)
         return new_id
+
+    def to_string(self, var_id):
+        alt_strs = ['%s:%0.4f' % (self.alt1s[var_id], self.prob1s[var_id])]
+        if self.altrests[var_id] is not None:
+            alts, probs = self.altrests[var_id], self.probrests[var_id]
+            for i, alt in enumerate(alts):
+                alt_strs.append('%s:%0.4f' % (alt, probs[i]))
+        return ('%d %s ' % (self.poss[var_id], self.origs[var_id])) + ' '.join(alt_strs)
 
     def add_alt_to_last(self, alt, prob):
         intern(alt)
@@ -46,7 +54,7 @@ class VariantSet:
         else:
             self.altrests[-1].append(alt)
             self.probrests[-1].append(prob)
-        assert self.sum_probs(-1) <= 1.0
+        assert self.sum_probs(-1) <= 1.01, self.to_string(-1)
 
     def get_alt(self, var_id, alt_id):
         if var_id >= len(self.poss):
@@ -71,6 +79,6 @@ class VariantSet:
         ret = self.prob1s[var_id]
         if self.probrests[var_id] is not None:
             tot = ret + sum(self.probrests[var_id])
-            assert tot <= 1.0
+            assert tot <= 1.01, self.to_string(-1)
             return tot
         return ret
