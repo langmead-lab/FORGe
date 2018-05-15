@@ -26,6 +26,8 @@ class VariantSet:
         intern(alt)
         intern(orig)
         new_id = len(self.poss)
+        assert orig != alt
+        assert prob <= 1.0
         self.poss.append(pos)
         self.origs.append(orig)
         self.alt1s.append(alt)
@@ -44,6 +46,7 @@ class VariantSet:
         else:
             self.altrests[-1].append(alt)
             self.probrests[-1].append(prob)
+        assert self.sum_probs(-1) <= 1.0
 
     def get_alt(self, var_id, alt_id):
         if var_id >= len(self.poss):
