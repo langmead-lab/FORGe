@@ -8,3 +8,4 @@
 */*.pbs
 __pycache__/
 .idea
+Xcode
