@@ -36,76 +36,24 @@
                                         (1ULL << (nbits)) - 1ULL)
 #define QBITS_LOCAL_QF 16
 
-enum DNA_MAP {DNA_C, DNA_A, DNA_T, DNA_G};  // A=1, C=0, T=2, G=3
-
 /*return the integer representation of the base */
 static inline uint8_t map_base(char base) {
 	switch(toupper(base)) {
-		case 'A': { return DNA_A; }
-		case 'T': { return DNA_T; }
-		case 'C': { return DNA_C; }
-		case 'G': { return DNA_G; }
-		default:  { return DNA_G+1; }
+		case 'A': { return 0; }
+		case 'T': { return 3; }
+		case 'C': { return 1; }
+		case 'G': { return 2; }
+		default:  { return 4; }
 	}
 }
+
+#define NON_ACGT(b) (b < 0 || b > 3)
 
 /* Return the reverse complement of a base */
-static inline int reverse_complement_base(int x) { return 3 - x; }
-
-/* Calculate the revsese complement of a kmer */
-static inline uint64_t reverse_complement(uint64_t kmer, uint32_t K) {
-	uint64_t rc = 0;
-	uint8_t base = 0;
-	for (int i=0; i<K; i++) {
-		base = kmer & 3ULL;
-		base = reverse_complement_base(base);
-		kmer >>= 2;
-		rc |= base;
-		rc <<= 2;
-	}
-	rc >>=2;
-	return rc;
-}
-
-/* Compare the kmer and its reverse complement and return the result
- * Return true if the kmer is greater than or equal to its
- * reverse complement.
- * */
-static inline bool compare_kmers(uint64_t kmer, uint64_t kmer_rev) {
-	return kmer >= kmer_rev;
-}
-
-/* dump the contents of a local QF into the main QF */
-static void dump_local_qf_to_main(struct flush_object *obj) {
-	QFi local_cfi;
-	if (qf_iterator(obj->local_qf, &local_cfi, 0)) {
-		do {
-			uint64_t key = 0, value = 0, count = 0;
-			qfi_get(&local_cfi, &key, &value, &count);
-			qf_insert(obj->main_qf, key, 0, count, true, true);
-		} while (!qfi_next(&local_cfi));
-		qf_reset(obj->local_qf);
-	}
-}
-
-/**
- * Converts a string of "ATCG" to a uint64_t
- * where each character is represented by using only two bits
- */
-static uint64_t str_to_int(const char *str, size_t len) {
-	uint64_t strint = 0;
-	for(size_t i = 0; i < len; i++) {
-		uint8_t curr = 0;
-		switch (str[i]) {
-			case 'A': { curr = DNA_A; break; }
-			case 'T': { curr = DNA_T; break; }
-			case 'C': { curr = DNA_C; break; }
-			case 'G': { curr = DNA_G; break; }
-		}
-		strint = strint | curr;
-		strint = strint << 2;
-	}
-	return strint >> 2;
+static inline int reverse_complement_base(int x) {
+	assert(x < 4);
+	assert(x >= 0);
+	return 3 ^ x;
 }
 
 static uint64_t MurmurHash64A(const void * key,
@@ -151,87 +99,222 @@ static uint64_t MurmurHash64A(const void * key,
 	return h;
 }
 
-int string_injest(const char *read,
-                  size_t read_len,
-                  struct flush_object *obj,
-                  int get_lock)
+/**
+ * Allocate and initialize a CQF and flush_object struct
+ */
+struct flush_object * cqf_new(int ksize, int qbits) {
+	struct flush_object *obj = malloc(sizeof(struct flush_object));
+	obj->local_qf = NULL;
+	obj->main_qf = malloc(sizeof(QF));
+	obj->ksize = ksize;
+	obj->count = 0;
+	memset(obj->fp_buf, 0, sizeof(uint32_t)*FP_BUF_ELTS);
+	
+	int num_hash_bits = qbits+8;	// we use 8 bits for remainders in the main QF
+	uint32_t seed = 2038074761;
+	qf_init(obj->main_qf, (1ULL << qbits), num_hash_bits, 0, true, "", seed);
+	return obj;
+}
+
+/**
+ * Allocate and initialize a CQF and flush_object struct
+ */
+void cqf_delete(struct flush_object *o) {
+	if(o->local_qf != NULL) {
+		free(o->local_qf);
+		o->local_qf = NULL;
+	}
+	if(o->main_qf != NULL) {
+		free(o->main_qf);
+		o->main_qf = NULL;
+	}
+	free(o);
+}
+
+typedef struct {
+	uint64_t u64s[4];
+} b256;
+
+/**
+ * Set to all 0s.
+ */
+void b256_clear(b256 *b) {
+	memset(b, 0, 32);
+}
+
+/**
+ * Left-shift by 2 bits and mask so that DNA string is no longer than k.  Put
+ * result in dst.
+ */
+void b256_lshift_and_mask(b256 *b, size_t k) {
+	k *= 2;
+	int word = (int)(k >> 6);
+	for(int i = 3; i > 0; i--) {
+		b->u64s[i] = (b->u64s[i] << 2) | (b->u64s[i-1] >> 62);
+		if(i == word) {
+			b->u64s[i] &= BITMASK(k & 63);
+		}
+	}
+	b->u64s[0] <<= 2;
+}
+
+/**
+ * Left-shift by 2 bits, in place.
+ */
+void b256_lshift(b256 *b) {
+	for(int i = 3; i > 0; i--) {
+		b->u64s[i] = (b->u64s[i] << 2) | (b->u64s[i-1] >> 62);
+	}
+	b->u64s[0] <<= 2;
+}
+
+/**
+ * Right-shift by 2 bits, in place.
+ */
+void b256_rshift_2(b256 *b) {
+	for(int i = 0; i < 3; i++) {
+		b->u64s[i] = (b->u64s[i] >> 2) | (b->u64s[i+1] << 62);
+	}
+	b->u64s[3] >>= 2;
+}
+
+/**
+ * OR the given value into the low bits of b, in place.
+ */
+void b256_or_low(b256 *b, uint8_t val) {
+	b->u64s[0] |= val;
+}
+
+/**
+ * OR the given value into given bitpair of b, in place.
+ */
+void b256_or_at(b256 *b, uint8_t val, int k) {
+	assert(k < 128);
+	assert(val < 4);
+	k *= 2;
+	size_t word = k >> 6, bitoff = k & 63;
+	b->u64s[word] |= ((uint64_t)val << bitoff);
+}
+
+/**
+ * Reverse complement the length-k DNA string in src, putting result in dst.
+ */
+void b256_revcomp(const b256 *src, b256 *dst, size_t k) {
+	// presumably *dst is all 0s
+	assert(k > 0);
+	size_t lo_word = 0, lo_bitoff = 0;
+	size_t hi_word = ((k-1) * 2) >> 6;
+	size_t hi_bitoff = ((k-1) * 2) & 63;
+	while(1) {
+		assert(lo_word >= 0);
+		assert(lo_word < 4);
+		assert(hi_word >= 0);
+		assert(hi_word < 4);
+		assert(lo_bitoff >= 0);
+		assert(lo_bitoff < 64);
+		assert(hi_bitoff >= 0);
+		assert(hi_bitoff < 64);
+		int base = (src->u64s[lo_word] >> lo_bitoff) & 3;
+		uint64_t rcbase = reverse_complement_base(base);
+		assert(rcbase < 4);
+		dst->u64s[hi_word] |= rcbase << hi_bitoff;
+		if(lo_bitoff == 62) {
+			lo_bitoff = 0;
+			lo_word++;
+		} else {
+			lo_bitoff += 2;
+		}
+		if(hi_bitoff == 0) {
+			if(hi_word == 0) {
+				break;
+			}
+			hi_word--;
+			hi_bitoff = 62;
+		} else {
+			hi_bitoff -= 2;
+		}
+	}
+}
+
+/**
+ * Return the pointer for whichever k-mer is minimal.
+ */
+b256 *b256_min(b256 *a, b256 *b) {
+	for(int i = 3; i >= 0; i--) {
+		if(a->u64s[i] < b->u64s[i]) {
+			return a;
+		} else if(a->u64s[i] != b->u64s[i]) {
+			return b;
+		}
+	}
+	return a;
+}
+
+/**
+ * Given a string, extract every k-mer, canonicalize, and add to the QF.
+ */
+int string_injest(
+    const char *read, // string whose k-mers to add
+    size_t read_len,  // length of string
+    struct flush_object *obj)
 {
+	const uint32_t k = obj->ksize;
 	const uint32_t seed = obj->main_qf->metadata->seed;
 	const __uint128_t range = obj->main_qf->metadata->range;
 	assert(obj->local_qf == NULL || obj->local_qf->metadata->range == range);
 	assert(obj->local_qf == NULL || obj->local_qf->metadata->seed == seed);
+	if(k > 127) {
+		fprintf(stderr, "No support for k-mers sizes over 127; k-mer size "
+		                "%u was specified\n", k);
+		return -1;
+	}
 	size_t left_chop = 0;
 	int nadded = 0;
 	do {
-		if (read_len - left_chop < obj->ksize) {
+		if (read_len - left_chop < k) {
 			return nadded; // start with the next read if length is smaller than K
 		}
-		uint64_t first = 0;
-		uint64_t first_rev = 0;
-		uint64_t item = 0;
-		
-		for(int i=0; i<obj->ksize; i++) { //First kmer
+		b256 first, first_rev, *item = NULL;
+		b256_clear(&first);
+		b256_clear(&first_rev);
+		for(int i = 0; i < k; i++) { // First kmer
 			uint8_t curr = map_base(read[left_chop + i]);
-			if (curr > DNA_G) { // 'N' is encountered
+			if(NON_ACGT(curr)) {
 				left_chop += (i+1);
-				if(read_len - left_chop < obj->ksize) {
+				if(read_len - left_chop < k) {
 				    return nadded;
 				}
 				continue;
 			}
-			first = first | curr;
-			first = first << 2;
+			b256_or_low(&first, curr);
+			b256_lshift(&first);
 		}
-		first = first >> 2;
-		first_rev = reverse_complement(first, obj->ksize);
-		item = compare_kmers(first, first_rev) ? first : first_rev;
-		item = MurmurHash64A(((void*)&item), sizeof(item), seed);
-		item %= range;
-
-		/*
-		 * first try and insert in the main QF.
-		 * If lock can't be accuired in the first attempt then
-		 * insert the item in the local QF.
-		 */
-		if (!qf_insert(obj->main_qf, item, 0, 1, get_lock, false)) {
-			assert(obj->local_qf != NULL);
-			qf_insert(obj->local_qf, item, 0, 1, false, false);
-			obj->count++;
-			// check of the load factor of the local QF is more than 50%
-			if (obj->count > 1ULL<<(QBITS_LOCAL_QF-1)) {
-				dump_local_qf_to_main(obj);
-				obj->count = 0;
-			}
-		}
+		b256_rshift_2(&first);
+		b256_revcomp(&first, &first_rev, k);
+		item = b256_min(&first, &first_rev);
+		uint64_t hash = MurmurHash64A((void*)item, 32, seed);
+		hash %= range;
+		qf_insert(obj->main_qf, hash, 0, 1, false, false);
 		nadded++;
-		uint64_t next = (first << 2) & BITMASK(2*obj->ksize);
-		uint64_t next_rev = first_rev >> 2;
 
-		for(uint32_t i=obj->ksize; i + left_chop < read_len; i++) {
+		b256 next = first, next_rev = first_rev;
+
+		for(uint32_t i = k; i + left_chop < read_len; i++) {
 			uint8_t curr = map_base(read[i + left_chop]);
-			if (curr > DNA_G) { // 'N' is encountered
+			if(NON_ACGT(curr)) {
 				left_chop += (i+1);
 				continue;
 			}
-			next |= curr;
+			b256_lshift_and_mask(&next, k);
+			b256_or_low(&next, curr);
 			uint64_t tmp = reverse_complement_base(curr);
-			tmp <<= (obj->ksize*2-2);
-			next_rev = next_rev | tmp;
-			item = compare_kmers(next, next_rev) ? next : next_rev;
-			item = MurmurHash64A(((void*)&item), sizeof(item), seed);
-			item %= range;
-			if (!qf_insert(obj->main_qf, item, 0, 1, get_lock, false)) {
-				qf_insert(obj->local_qf, item, 0, 1, false, false);
-				obj->count++;
-				// check of the load factor of the local QF is more than 50%
-				if (obj->count > 1ULL<<(QBITS_LOCAL_QF-1)) {
-					dump_local_qf_to_main(obj);
-					obj->count = 0;
-				}
-			}
+			b256_rshift_2(&next_rev);
+			b256_or_at(&next_rev, tmp, k - 1);
+			item = b256_min(&next, &next_rev);
+			hash = MurmurHash64A((void*)item, 32, seed);
+			hash %= range;
+			qf_insert(obj->main_qf, hash, 0, 1, false, false);
 			nadded++;
-			next = (next << 2) & BITMASK(2*obj->ksize);
-			next_rev = next_rev >> 2;
 		}
 	} while(false);
 	return nadded;
@@ -241,12 +324,14 @@ int string_injest(const char *read,
  * Assumes no locking is needed, i.e. that no other thread
  * is trying to update the CQF.
  */
-int string_query(const char *read_orig,
-                 size_t read_len_orig,
-                 int64_t *count_array,
-                 size_t count_array_len,
-                 struct flush_object *obj)
+int string_query(
+    const char *read_orig,
+    size_t read_len_orig,
+    int64_t *count_array,
+    size_t count_array_len,
+    struct flush_object *obj)
 {
+	const uint32_t k = obj->ksize;
 	const uint32_t seed = obj->main_qf->metadata->seed;
 	const __uint128_t range = obj->main_qf->metadata->range;
 	assert(obj->local_qf == NULL || obj->local_qf->metadata->range == range);
@@ -255,18 +340,17 @@ int string_query(const char *read_orig,
 	const char *read = read_orig;
 	size_t read_len = read_len_orig;
 	do {
-		if(read_len < obj->ksize) {
+		if(read_len < k) {
 			return (int)(cur_count - count_array);
 		}
-		uint64_t first = 0;
-		uint64_t first_rev = 0;
-		uint64_t item = 0;
-		
+		b256 first, first_rev, *item = NULL;
+		b256_clear(&first);
+		b256_clear(&first_rev);
 		int do_continue = 0;
-		for(int i = 0; i<obj->ksize; i++) {
+		for(int i = 0; i < k; i++) {
 			uint8_t curr = map_base(read[i]);
-			if (curr > DNA_G) { // 'N' is encountered
-				// append -1s for k-mers that include a non-ACGT 
+			if(NON_ACGT(curr)) {
+				// append -1s for k-mers that include a non-ACGT
 				for(int j = 0; j <= i && j + obj->ksize <= read_len; j++) {
 					*cur_count++ = -1;
 					assert(cur_count - count_array <= count_array_len);
@@ -276,36 +360,39 @@ int string_query(const char *read_orig,
 				do_continue = 1;
 				break;
 			}
-			first = first | curr;
-			first = first << 2;
+			b256_or_low(&first, curr);
+			b256_lshift(&first);
 		}
 		if(do_continue) {
 			continue;
 		}
-		first = first >> 2;
-		first_rev = reverse_complement(first, obj->ksize);
-		item = compare_kmers(first, first_rev) ? first : first_rev;
-		item = MurmurHash64A(((void*)&item), sizeof(item), seed);
-		item %= range;
-		uint64_t count = qf_count_key_value(obj->main_qf, item, 0);
+
+		b256_rshift_2(&first);
+		b256_revcomp(&first, &first_rev, k);
+		item = b256_min(&first, &first_rev);
+		uint64_t hash = MurmurHash64A((void*)item, 32, seed);
+		hash %= range;
+		if(hash < FP_BUF_ELTS) {
+			obj->fp_buf[hash]++;
+		}
+		uint64_t count = qf_count_key_value(obj->main_qf, hash, 0);
 		*cur_count++ = count;
 		if(cur_count - count_array > count_array_len) {
 			fprintf(stderr, "Wrote off end of count array\n");
 			exit(1);
 		}
-		
-		uint64_t next = (first << 2) & BITMASK(2*obj->ksize);
-		uint64_t next_rev = first_rev >> 2;
-		read += obj->ksize;
-		if(read_len < obj->ksize) {
+
+		b256 next = first, next_rev = first_rev;
+		read += k;
+		if(read_len < k) {
 			fprintf(stderr, "Query string became too short\n");
 			exit(1);
 		}
-		read_len -= obj->ksize;
+		read_len -= k;
 
 		for(uint32_t i = 0; i < read_len; i++) { //next kmers
 			uint8_t curr = map_base(read[i]);
-			if (curr > DNA_G) { // 'N' is encountered
+			if(NON_ACGT(curr)) {
 				for(int j = 0; j < obj->ksize; j++) {
 					*cur_count++ = -1;
 				}
@@ -314,21 +401,23 @@ int string_query(const char *read_orig,
 				do_continue = 1;
 				break;
 			}
-			next |= curr;
+			b256_lshift_and_mask(&next, k);
+			b256_or_low(&next, curr);
 			uint64_t tmp = reverse_complement_base(curr);
-			tmp <<= (obj->ksize*2-2);
-			next_rev = next_rev | tmp;
-			item = compare_kmers(next, next_rev) ? next : next_rev;
-			item = MurmurHash64A(((void*)&item), sizeof(item), seed);
-			item %= range;
-			count = qf_count_key_value(obj->main_qf, item, 0);
+			b256_rshift_2(&next_rev);
+			b256_or_at(&next_rev, tmp, k - 1);
+			item = b256_min(&next, &next_rev);
+			hash = MurmurHash64A((void*)item, 32, seed);
+			hash %= range;
+			if(hash < FP_BUF_ELTS) {
+				obj->fp_buf[hash]++;
+			}
+			count = qf_count_key_value(obj->main_qf, hash, 0);
 			*cur_count++ = count;
 			if(cur_count - count_array > count_array_len) {
 				fprintf(stderr, "Wrote off end of count array\n");
 				exit(1);
 			}
-			next = (next << 2) & BITMASK(2*obj->ksize);
-			next_rev = next_rev >> 2;
 		}
 		if(!do_continue) {
 			break;
@@ -337,35 +426,101 @@ int string_query(const char *read_orig,
 	return (int)(cur_count - count_array);
 }
 
+/**
+ * Put false positive rate information into the given count_array.  Returns up
+ * to min(FP_BUF_ELTS, range) pairs of uint64_ts.  Each pair consists of an
+ * observed count and a true count.
+ */
+int est_fpr(
+    int64_t *count_array,
+    size_t count_array_len,
+    struct flush_object *obj)
+{
+	const __uint128_t range = obj->main_qf->metadata->range;
+	assert(obj->local_qf == NULL || obj->local_qf->metadata->range == range);
+	int LIMIT = FP_BUF_ELTS < range ? FP_BUF_ELTS : range;
+	LIMIT = LIMIT < ((int)count_array_len/2) ? LIMIT : ((int)count_array_len/2);
+	for(size_t i = 0; i < LIMIT; i++) {
+		uint64_t obs_count = qf_count_key_value(obj->main_qf, i, 0);
+		uint64_t true_count = obj->fp_buf[i];
+		assert(obs_count >= true_count);
+		*count_array++ = obs_count;
+		*count_array++ = true_count;
+	}
+	return LIMIT;
+}
+
 #ifdef SQUEAKR_TEST_MAIN
-/* main method */
-int main(int argc, char *argv[]) {
-	QF cf;
+static void init(QF *cf, struct flush_object *obj, int ksize, int qbits) {
+	obj->local_qf = NULL;
+	obj->main_qf = cf;
+	obj->ksize = ksize;
+	obj->count = 0;
+	memset(obj->fp_buf, 0, sizeof(uint32_t)*FP_BUF_ELTS);
 	
+	int num_hash_bits = qbits+8;	// we use 8 bits for remainders in the main QF
+	uint32_t seed = 2038074761;
+	qf_init(cf, (1ULL << qbits), num_hash_bits, 0, true, "", seed);
+}
+
+static void quick_tests(unsigned seed) {
+	{
+		int64_t results[4];
+		const char *text = "ACGTACG";
+		//                  0123
+		for(int i = 0; i < 3; i++) {
+			QF cf; struct flush_object obj; init(&cf, &obj, 4, 10);
+			string_injest(text, i + 4, &obj);
+			string_query(text, i+4, results, i+1, &obj);
+			for(int j = 0; j <= i; j++) {
+				assert(results[j] == 1);
+			}
+		}
+		QF cf; struct flush_object obj; init(&cf, &obj, 4, 10);
+		string_injest(text, 7, &obj);
+		string_query(text, 7, results, 4, &obj);
+		assert(results[0] == 1);
+		assert(results[1] == 2);
+		assert(results[2] == 1);
+		assert(results[3] == 2);
+	}
+	
+	{
+		QF cf; struct flush_object obj; init(&cf, &obj, 60, 10);
+		srand(seed);
+		int textlen = 100000;
+		int ksize = 60;
+		char *text = (char*)malloc(textlen + ksize);
+		char *cur = text;
+		for(int i = 0; i < textlen + ksize - 1; i++) {
+			*cur++ = "ACGT"[rand() % 4];
+		}
+		text[textlen+ksize-1] = '\0';
+		string_injest(text, textlen + ksize - 1, &obj);
+	}
+}
+
+int main(int argc, char *argv[]) {
+
 	if(argc < 5) {
 		fprintf(stderr, "Need at least 4 args\n");
 		return 1;
 	}
-	
-	int ksize = atoi(argv[1]);
-	int qbits = atoi(argv[2]);
-	
+
+	int ksize = atoi(argv[1]), qbits = atoi(argv[2]);
 	fprintf(stderr, "Using ksize: %d\n", ksize);
 	fprintf(stderr, "Using qbits: %d\n", qbits);
+	unsigned seed = 777;
 
+	quick_tests(seed);
+
+	QF cf;
 	struct flush_object obj;
-	obj.local_qf = NULL;
-	obj.main_qf = &cf;
-	obj.ksize = ksize;
-	obj.count = 0;
-	
-	int num_hash_bits = qbits+8;	// we use 8 bits for remainders in the main QF
-	uint32_t seed = 2038074761;
-	qf_init(&cf, (1ULL<<qbits), num_hash_bits, 0, true, "", seed);
-	
+	init(&cf, &obj, ksize, qbits);
+
 	fprintf(stderr, "Building reference from: %s\n", argv[3]);
-	string_injest(argv[3], strlen(argv[3]), &obj, false); // no locking
-	
+	string_injest(argv[3], strlen(argv[3]), &obj);
+
 	for(size_t i = 4; i < argc; i++) {
 		size_t len = strlen(argv[i]);
 		size_t results_len = len - ksize + 1;

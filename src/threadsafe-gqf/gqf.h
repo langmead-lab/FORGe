@@ -14,10 +14,9 @@ extern "C" {
 	8, 16, 32, or 64 (for optimized versions),
 	or other integer <= 56 (for compile-time-optimized bit-shifting-based versions)
 	*/
-#define BITS_PER_SLOT 0
+#define BITS_PER_SLOT 8
 
-	struct __attribute__ ((__packed__)) qfblock;
-	typedef struct qfblock qfblock;
+	struct __attribute__ ((__packed__)) _qfblock;
 
 	uint64_t shift_into_b2(uint64_t a, uint64_t b, int bstart, int bend, int amount);
 
@@ -59,7 +58,7 @@ extern "C" {
 	typedef struct quotient_filter {
 		qfmem *mem;
 		qfmetadata *metadata;
-		qfblock *blocks;
+		struct _qfblock *blocks;
 	} quotient_filter;
 
 	typedef quotient_filter QF;

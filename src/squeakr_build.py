@@ -30,13 +30,17 @@ ffibuilder.cdef("""
         struct quotient_filter* main_qf;
         uint32_t count;
         uint32_t ksize;
+        uint64_t fp_buf[100];
     };
+
+    struct flush_object * cqf_new(int ksize, int qbits);
+
+    void cqf_delete(struct flush_object *o);
 
     int string_injest(
         const char *read,
         size_t read_len,
-        struct flush_object *obj,
-        int get_lock);
+        struct flush_object *obj);
 
     int string_query(
         const char *read,
@@ -45,11 +49,10 @@ ffibuilder.cdef("""
         size_t count_array_len,
         struct flush_object *obj);
 
-    struct quotient_filter* qf_init_simple(
-        uint64_t nslots,
-        uint64_t key_bits,
-        uint64_t value_bits,
-        uint32_t seed);
+    int est_fpr(
+        int64_t *count_array,
+        size_t count_array_len,
+        struct flush_object *obj);
 
     void qf_destroy(struct quotient_filter *qf, bool mem);
 """)
