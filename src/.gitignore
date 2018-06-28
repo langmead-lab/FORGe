@@ -2,3 +2,4 @@
 *.o
 _api.*
 squeakr-test
+.cache

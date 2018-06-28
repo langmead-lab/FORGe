@@ -9,3 +9,4 @@
 __pycache__/
 .idea
 Xcode
+.pytest_cache
