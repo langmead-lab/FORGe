@@ -5,6 +5,7 @@ python:
 - '3.5'
 - '3.6'
 install:
+- apt-get install -y gcc g++
 - pip install --upgrade pip setuptools
 - pip install -r requirements.txt
 script:
