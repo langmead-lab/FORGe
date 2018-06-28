@@ -59,4 +59,5 @@ ffibuilder.cdef("""
 
 if __name__ == "__main__":
     import sys
-    ffibuilder.compile(verbose=True, debug=True if '--debug' in sys.argv else None)
+    #ffibuilder.compile(verbose=True, debug=True if '--debug' in sys.argv else None)
+    ffibuilder.compile(verbose=True)
