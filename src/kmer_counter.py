@@ -15,8 +15,12 @@ import logging
 from _api import ffi, lib
 
 
-_revcomp_trans = string.maketrans("ACGTacgt", "TGCAtgca")
-_non_acgt = re.compile('[^ACGTacgt]')
+try:
+    _revcomp_trans = string.maketrans("ACGTacgt", "TGCAtgca")
+except AttributeError:
+    _revcomp_trans = bytes.maketrans(b"ACGTacgt", b"TGCAtgca")
+
+_non_acgt = re.compile(b'[^ACGTacgt]')
 
 
 def revcomp(x):
@@ -45,10 +49,12 @@ class SimpleKmerCounter(object):
 
     def add(self, s):
         """ Add canonicalized version of each k-mer substring """
+        assert isinstance(s, bytes)
         self.counter.update(filter(lambda x: x is not None, slice_canonical(s, self.r)))
 
     def query(self, s):
         """ Query with each k-mer substring """
+        assert isinstance(s, bytes)
         return map(lambda kmer: -1 if kmer is None else self.counter.get(kmer), slice_canonical(s, self.r))
 
 
@@ -63,12 +69,12 @@ class BounterKmerCounter(object):
 
     def add(self, s):
         """ Add canonicalized version of each k-mer substring """
-        s = bytes(s)
+        assert isinstance(s, bytes)
         self.counter.update(filter(lambda x: x is not None, slice_canonical(s, self.r)))
 
     def query(self, s):
         """ Query with each k-mer substring """
-        s = bytes(s)
+        assert isinstance(s, bytes)
         return map(lambda kmer: -1 if kmer is None else self.counter[kmer], slice_canonical(s, self.r))
 
 
@@ -133,49 +139,49 @@ def counter_class(request):
 
 
 def test_revcomp():
-    assert 'ACGT' == revcomp('ACGT')
-    assert 'A' == revcomp('T')
-    assert '' == revcomp('')
-    assert 'N' == revcomp('N')
-    assert 'ANG' == revcomp('CNT')
+    assert b'ACGT' == revcomp(b'ACGT')
+    assert b'A' == revcomp(b'T')
+    assert b'' == revcomp(b'')
+    assert b'N' == revcomp(b'N')
+    assert b'ANG' == revcomp(b'CNT')
 
 
 def test_slice_1():
-    lst = slice('ACGT', 1)
-    assert list('ACGT') == lst
+    lst = list(slice(b'ACGT', 1))
+    assert [b'A', b'C', b'G', b'T'] == lst
 
 
 def test_slice_2():
-    lst = slice('ACGT', 4)
-    assert ['ACGT'] == lst
-    lst = slice('ACNT', 4)
+    lst = list(slice(b'ACGT', 4))
+    assert [b'ACGT'] == lst
+    lst = list(slice(b'ACNT', 4))
     assert [ None ] == lst
 
 
 def test_slice_and_canonicalize():
-    lst = slice_canonical('ACGT', 1)
-    assert list('ACCA') == lst
-    lst = slice_canonical('ACGT', 2)
-    assert ['AC', 'CG', 'AC'] == lst
+    lst = list(slice_canonical(b'ACGT', 1))
+    assert [b'A', b'C', b'C', b'A'] == lst
+    lst = list(slice_canonical(b'ACGT', 2))
+    assert [b'AC', b'CG', b'AC'] == lst
 
 
 def test_counter_1(counter_class):
     cnt = counter_class('Test', 4)
-    cnt.add('ACGT')
-    res = cnt.query('ACGT')
+    cnt.add(b'ACGT')
+    res = list(cnt.query(b'ACGT'))
     assert len(res) == 1
     assert res[0] == 1
 
-    cnt.add('ACNT')
-    res = cnt.query('ACGT')
+    cnt.add(b'ACNT')
+    res = list(cnt.query(b'ACGT'))
     assert len(res) == 1
     assert res[0] == 1  # cumulative
 
 
 def test_counter_2(counter_class):
     cnt = counter_class('Test', 8)
-    cnt.add('ACGTACGTNACGTACGT')
-    res = cnt.query('ACGTACGTN')
+    cnt.add(b'ACGTACGTNACGTACGT')
+    res = list(cnt.query(b'ACGTACGTN'))
     assert len(res) == 2
     assert res[0] == 2
     assert res[1] == -1
@@ -183,13 +189,13 @@ def test_counter_2(counter_class):
 
 def test_counter_3(counter_class):
     cnt = counter_class('Test', 4)
-    cnt.add('ACGTACGTNACGTACGT')
+    cnt.add(b'ACGTACGTNACGTACGT')
     #        0000    x5555      ACGT x 2
     #         1111   x 6666     CGTA x 2
     #          2222  x  7777    GTAC x 2
     #           3333 x   8888   TACG -> CGTA x 2
     #            4444x    9999  ACGT x 2
-    res = cnt.query('ACGTACG')
+    res = list(cnt.query(b'ACGTACG'))
     #                0000
     #                 1111
     #                  2222
