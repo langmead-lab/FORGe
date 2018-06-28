@@ -28,7 +28,6 @@ import random
 import logging
 import unittest
 from docopt import docopt
-#from collections import Counter
 
 
 def cqf_injest(db, s):

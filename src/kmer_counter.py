@@ -12,6 +12,7 @@ import pytest
 from bounter import bounter
 from collections import Counter
 import logging
+from _api import ffi, lib
 
 
 _revcomp_trans = string.maketrans("ACGTacgt", "TGCAtgca")
@@ -97,12 +98,12 @@ class SqueakrKmerCounter(object):
     """
     What is the size of the CQF?
     """
-    def __init__(self, name, r, qbits=10, seed=777, create_local=False):
+    def __init__(self, name, r, qbits=10, seed=777):
         self.name = name
         self.r = r
         self.qbits = qbits
         self.seed = seed
-        self.db = squeakr.cqf_new_db(r, qbits, seed, create_local=create_local)
+        self.db = lib.cqf_new(r, qbits)
         self.nadded = 0
 
     def add(self, s):
@@ -121,6 +122,7 @@ class SqueakrKmerCounter(object):
 def pytest_generate_tests(metafunc):
     if 'counter_class' in metafunc.fixturenames:
         # Add classes to list as they are added
+        #counter_classes = [SimpleKmerCounter, BounterKmerCounter, SqueakrKmerCounter]
         counter_classes = [SimpleKmerCounter, BounterKmerCounter]
         metafunc.parametrize("counter_class", counter_classes, indirect=True)
 
