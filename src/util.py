@@ -5,6 +5,7 @@ Utility functions
 """
 
 import re
+from variant import VariantSet
 
 
 def get_next_vector(k, counts, v):
@@ -114,111 +115,103 @@ class PseudocontigIterator:
                 return read
 
 
-if __name__ == '__main__':
-    import sys
-    del sys.argv[1:] # Don't choke on extra command-line parameters
-    import unittest
-    from variant import VariantSet
+def test_get_next_vector():
+    vec = [0, 0]
+    counts = [1, 1]
+    vec, done = get_next_vector(2, counts, vec)
+    assert not done
+    assert [0, 1] == vec
+    vec, done = get_next_vector(2, counts, vec)
+    assert not done
+    assert [1, 0] == vec
+    vec, done = get_next_vector(2, counts, vec)
+    assert not done
+    assert [1, 1] == vec
+    vec, done = get_next_vector(2, counts, vec)
+    assert done
 
-    class TestGenNextVector(unittest.TestCase):
 
-        def test_simple1(self):
-            vec = [0, 0]
-            counts = [1, 1]
-            vec, done = get_next_vector(2, counts, vec)
-            self.assertFalse(done)
-            self.assertEqual([0, 1], vec)
-            vec, done = get_next_vector(2, counts, vec)
-            self.assertFalse(done)
-            self.assertEqual([1, 0], vec)
-            vec, done = get_next_vector(2, counts, vec)
-            self.assertFalse(done)
-            self.assertEqual([1, 1], vec)
-            vec, done = get_next_vector(2, counts, vec)
-            self.assertTrue(done)
+def test_pc_iter_1():
+    seq = 'AAAAAAAAA'
+    #      012345678
+    #          T
 
-    class TestPseudocontigIterator(unittest.TestCase):
+    variants = VariantSet()
+    variants.add_var(4, 'A', 'T', 0.25)
 
-        def test_simple1(self):
-            seq = 'AAAAAAAAA'
-            #      012345678
-            #          T
+    pi = PseudocontigIterator(seq, variants, [0], 4)
+    pcs = [x for x in pi]
+    assert 1 == len(pcs)
+    assert 'AAATAAA' == pcs[0]
 
-            variants = VariantSet()
-            variants.add_var(4, 'A', 'T', 0.25)
+    pi = PseudocontigIterator(seq, variants, [0], 5)
+    pcs = [x for x in pi]
+    assert 1 == len(pcs)
+    assert 'AAAATAAAA' == pcs[0]
 
-            pi = PseudocontigIterator(seq, variants, [0], 4)
-            pcs = [x for x in pi]
-            self.assertEqual(1, len(pcs))
-            self.assertEqual('AAATAAA', pcs[0])
+    pi = PseudocontigIterator(seq, variants, [0], 6)
+    pcs = [x for x in pi]
+    assert 1 == len(pcs)
+    assert 'AAAATAAAA' == pcs[0]
 
-            pi = PseudocontigIterator(seq, variants, [0], 5)
-            pcs = [x for x in pi]
-            self.assertEqual(1, len(pcs))
-            self.assertEqual('AAAATAAAA', pcs[0])
+    pi = PseudocontigIterator(seq, variants, [0], 9)
+    pcs = [x for x in pi]
+    assert 1 == len(pcs)
+    assert 'AAAATAAAA' == pcs[0]
 
-            pi = PseudocontigIterator(seq, variants, [0], 6)
-            pcs = [x for x in pi]
-            self.assertEqual(1, len(pcs))
-            self.assertEqual('AAAATAAAA', pcs[0])
 
-            pi = PseudocontigIterator(seq, variants, [0], 9)
-            pcs = [x for x in pi]
-            self.assertEqual(1, len(pcs))
-            self.assertEqual('AAAATAAAA', pcs[0])
+def test_pc_iter_2():
+    seq = 'AAAAAAAAAA'
+    #      0123456789
+    #          CG
 
-        def test_double1(self):
-            seq = 'AAAAAAAAAA'
-            #      0123456789
-            #          CG
+    variants = VariantSet()
+    variants.add_var(4, 'A', 'C', 0.25)
+    variants.add_var(5, 'A', 'G', 0.25)
 
-            variants = VariantSet()
-            variants.add_var(4, 'A', 'C', 0.25)
-            variants.add_var(5, 'A', 'G', 0.25)
+    pi = PseudocontigIterator(seq, variants, [0, 1], 4)
+    pcs = [x for x in pi]
+    assert 2 == len(pcs)
+    pcs.sort()
+    assert 'AAACAAA' == pcs[0]
+    assert 'AACGAA' == pcs[1]
 
-            pi = PseudocontigIterator(seq, variants, [0, 1], 4)
-            pcs = [x for x in pi]
-            self.assertEqual(2, len(pcs))
-            pcs.sort()
-            self.assertEqual('AAACAAA', pcs[0])
-            self.assertEqual('AACGAA', pcs[1])
+    pi = PseudocontigIterator(seq, variants, [0, 1], 5)
+    pcs = [x for x in pi]
+    assert 2 == len(pcs)
+    pcs.sort()
+    assert 'AAAACAAAA' == pcs[0]
+    assert 'AAACGAAA' == pcs[1]
 
-            pi = PseudocontigIterator(seq, variants, [0, 1], 5)
-            pcs = [x for x in pi]
-            self.assertEqual(2, len(pcs))
-            pcs.sort()
-            self.assertEqual('AAAACAAAA', pcs[0])
-            self.assertEqual('AAACGAAA', pcs[1])
 
-        def test_triple1(self):
-            seq = 'AAAAAAAAAAA'
-            #      01234567890
-            #          CGT
+def test_pc_iter_3():
+    seq = 'AAAAAAAAAAA'
+    #      01234567890
+    #          CGT
 
-            variants = VariantSet()
-            variants.add_var(4, 'A', 'C', 0.25)
-            variants.add_var(5, 'A', 'G', 0.25)
-            variants.add_var(6, 'A', 'T', 0.25)
+    variants = VariantSet()
+    variants.add_var(4, 'A', 'C', 0.25)
+    variants.add_var(5, 'A', 'G', 0.25)
+    variants.add_var(6, 'A', 'T', 0.25)
 
-            pi = PseudocontigIterator(seq, variants, [0, 1, 2], 4)
-            pcs = [x for x in pi]
-            self.assertEqual(4, len(pcs))
-            pcs.sort()
-            self.assertEqual('AAACAAA', pcs[0])
-            self.assertEqual('AACGAA', pcs[1])
-            self.assertEqual('ACATA', pcs[2])
-            self.assertEqual('ACGTA', pcs[3])
+    pi = PseudocontigIterator(seq, variants, [0, 1, 2], 4)
+    pcs = [x for x in pi]
+    assert 4 == len(pcs)
+    pcs.sort()
+    assert 'AAACAAA' == pcs[0]
+    assert 'AACGAA' == pcs[1]
+    assert 'ACATA' == pcs[2]
+    assert 'ACGTA' == pcs[3]
 
-        def test_invalid(self):
-            seq = 'AAANAAAAA'
-            #      012345678
-            #          T
 
-            variants = VariantSet()
-            variants.add_var(4, 'A', 'T', 0.25)
+def test_pc_iter_4():
+    seq = 'AAANAAAAA'
+    #      012345678
+    #          T
 
-            pi = PseudocontigIterator(seq, variants, [0], 4)
-            pcs = [x for x in pi]
-            self.assertEqual(0, len(pcs))
+    variants = VariantSet()
+    variants.add_var(4, 'A', 'T', 0.25)
 
-    unittest.main()
+    pi = PseudocontigIterator(seq, variants, [0], 4)
+    pcs = [x for x in pi]
+    assert 0 == len(pcs)

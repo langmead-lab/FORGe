@@ -3,7 +3,6 @@
 """squeakr
 
 Usage:
-  squeakr unit-test
   squeakr fpr-test <keys> [options]
 
 Options:
@@ -22,11 +21,9 @@ CQF.  Uses CFFI.  Run squeakr_build.py first.
 """
 
 from _api import ffi, lib
-import sys
 import math
 import random
 import logging
-import unittest
 from docopt import docopt
 
 
@@ -69,40 +66,39 @@ def cqf_est_fpr(db):
     return results, results_len
 
 
-class TestSqueakr(unittest.TestCase):
+def test_simple_query_1():
+    db = lib.cqf_new(4, 10);
+    lib.string_injest(b'ACGT', 4, db)
+    results = ffi.new('int64_t[]', 1)
+    nresults = lib.string_query(b'ACGT', 4, results, 1, db)
+    assert 1 == nresults
+    assert 1 == results[0]
+    lib.cqf_delete(db)
 
-    def test_simple_query_1(self):
-        db = lib.cqf_new(4, 10);
-        lib.string_injest(b'ACGT', 4, db)
-        results = ffi.new('int64_t[]', 1)
-        nresults = lib.string_query(b'ACGT', 4, results, 1, db)
-        self.assertEqual(1, nresults)
-        self.assertEqual(1, results[0])
-        lib.cqf_delete(db)
 
-    def test_query_with_ns(self):
-        db = lib.cqf_new(4, 10);
-        to_injest = b'ACGTACGT'
-        lib.string_injest(to_injest, len(to_injest), db)
-        to_query = b'ACGTNACGTNACGT'
-        #           01234567890123
-        stlen = len(to_query)
-        results_len = stlen - db.ksize + 1
-        results = ffi.new('int64_t[]', results_len)
-        nresults = lib.string_query(to_query, stlen, results, results_len, db)
-        self.assertEqual(nresults, results_len)
-        self.assertEqual(2, results[0])
-        self.assertEqual(-1, results[1])
-        self.assertEqual(-1, results[2])
-        self.assertEqual(-1, results[3])
-        self.assertEqual(-1, results[4])
-        self.assertEqual(2, results[5])
-        self.assertEqual(-1, results[6])
-        self.assertEqual(-1, results[7])
-        self.assertEqual(-1, results[8])
-        self.assertEqual(-1, results[9])
-        self.assertEqual(2, results[10])
-        lib.cqf_delete(db)
+def test_query_with_ns():
+    db = lib.cqf_new(4, 10);
+    to_injest = b'ACGTACGT'
+    lib.string_injest(to_injest, len(to_injest), db)
+    to_query = b'ACGTNACGTNACGT'
+    #           01234567890123
+    stlen = len(to_query)
+    results_len = stlen - db.ksize + 1
+    results = ffi.new('int64_t[]', results_len)
+    nresults = lib.string_query(to_query, stlen, results, results_len, db)
+    assert nresults == results_len
+    assert 2 == results[0]
+    assert -1 == results[1]
+    assert -1 == results[2]
+    assert -1 == results[3]
+    assert -1 == results[4]
+    assert 2 == results[5]
+    assert -1 == results[6]
+    assert -1 == results[7]
+    assert -1 == results[8]
+    assert -1 == results[9]
+    assert 2 == results[10]
+    lib.cqf_delete(db)
 
 
 def fpr_test(nkeys, seed, qbits, ksize, nchunks=None):
@@ -133,8 +129,5 @@ if __name__ == '__main__':
     qbits = int(args['-q'])
     ksize = int(args['-k'])
     logging.basicConfig()
-    if args['unit-test']:
-        del sys.argv[1:]
-        unittest.main(exit=False)
-    elif args['fpr-test']:
+    if args['fpr-test']:
         fpr_test(int(args['<keys>']), seed, qbits, ksize)
