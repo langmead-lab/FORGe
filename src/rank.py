@@ -16,7 +16,8 @@ VERSION = '0.0.1'
 
 
 class VarRanker:
-    def __init__(self, genome, variants, r, phasing, max_v):
+
+    def __init__(self, genome, variants, r, phasing, max_v, counter_type):
         logging.info('Creating ranker')
         self.genome = genome
         self.chrom_lens = dict()
@@ -32,6 +33,38 @@ class VarRanker:
         self.wgt_ref = self.wgt_added = None
         self.curr_vars = None
         self.freqs = {}
+        self.counter_type = counter_type
+
+    def counter_maker(self, name):
+        if self.counter_type == 'Simple':
+            return kmer_counter.SimpleKmerCounter(name, self.r)
+        elif self.counter_type.startswith('Jellyfish'):
+            toks = self.counter_type.split(',')
+            initial_size, bits_per_value = 1024, 5
+            if len(toks) > 1:
+                initial_size = int(toks[1])
+            if len(toks) > 2:
+                bits_per_value = int(toks[2])
+            return kmer_counter.JellyfishKmerCounter(name, self.r,
+                                                     initial_size=initial_size,
+                                                     bits_per_value=bits_per_value)
+        elif self.counter_type.startswith('Bounter'):
+            toks = self.counter_type.split(',')
+            size_mb, log_counting = 1024, 1024
+            if len(toks) > 1:
+                size_mb = int(toks[1])
+            if len(toks) > 2:
+                log_counting = int(toks[2])
+            return kmer_counter.BounterKmerCounter(name, self.r,
+                                                   size_mb=size_mb,
+                                                   log_counting=log_counting)
+        else:
+            assert self.counter_type.startswith('Squeakr')
+            toks = self.counter_type.split(',')
+            qbits = 10
+            if len(toks) > 1:
+                qbits = int(toks[1])
+            return kmer_counter.SqueakrKmerCounter(name, self.r, qbits=qbits)
 
     def avg_read_prob(self):
         logging.info('  Calculating average read probabilities')
@@ -143,19 +176,18 @@ class VarRanker:
 
     def count_kmers_ref(self):
         logging.info('  Counting reference k-mers')
-
-        # Create new Jellyfish counter and count all kmers in reference genome
-        self.h_ref = kmer_counter.SqueakrKmerCounter('Reference', self.r)
+        self.h_ref = self.counter_maker('Ref')
         n_pcs, tot_pc_len = 0, 0
         for chrom in self.genome.values():
             self.h_ref.add(chrom)
             n_pcs += 1
             tot_pc_len += len(chrom)
             logging.info('    %d contigs, %d bases' % (n_pcs, tot_pc_len))
+        #self.h_ref.report_fpr()
 
     def count_kmers_added(self):
         logging.info('  Counting augmented k-mers')
-        self.h_added = kmer_counter.SqueakrKmerCounter('Augmented', self.r)
+        self.h_added = self.counter_maker('Aug')
         n_pcs, n_vars, tot_pc_len, max_vars = 0, 0, 0, 0
         incr = 1.1
         bar = 1000
@@ -185,9 +217,8 @@ class VarRanker:
                     tot_pc_len += len(pc)
                     if n_pcs >= bar:
                         bar = max(bar+1, int(bar*incr))
-                        added_kmers, ref_kmers = self.h_added.nadded, self.h_ref.nadded
-                        logging.info('    %d contigs, %d vars; kmer mult=%0.2f; max vars=%d; %0.3f%% done' %
-                                     (n_pcs, n_vars, float(added_kmers)/ref_kmers, max_vars, 100.0*float(n_vars)/self.num_v))
+                        logging.info('    %d contigs, %d vars; max vars=%d; %0.3f%% done' %
+                                     (n_pcs, n_vars, max_vars, 100.0*float(n_vars)/self.num_v))
                     self.h_added.add(pc)
 
     def prob_read(self, variants, var_ids, vec):
@@ -512,18 +543,10 @@ class VarRanker:
 
 
 def go(args):
-    if args.window_size:
-        r = args.window_size
-    else:
-        r = 35
-    if args.output:
-        o = args.output
-    else:
-        o = 'ordered.txt'
-    if args.prune:
-        max_v = args.prune
-    else:
-        max_v = r
+    r = args.window_size or 35
+    o = args.output or 'ordered.txt'
+    max_v = args.prune or r
+    counter_type = args.counter or 'Bounter,1024,1024'
 
     logging.info('Reading genome')
     genome = read_genome(args.reference, target_chrom=args.chrom)
@@ -531,7 +554,7 @@ def go(args):
     logging.info('Parsing 1ksnp')
     vars = parse_1ksnp(args.vars, G=genome, target_chrom=args.chrom)
 
-    ranker = VarRanker(genome, vars, r, args.phasing, max_v)
+    ranker = VarRanker(genome, vars, r, args.phasing, max_v, counter_type)
     if args.pseudocontigs:
         raise RuntimeError('--pseudocontigs not supported')
         #ranker.seen_pcs(o)
@@ -569,6 +592,8 @@ if __name__ == '__main__':
         help="Path to file containing phasing information for each individual")
     parser.add_argument('--output', type=str, required=False,
         help="Path to file to write output ranking to. Default: 'ordered.txt'")
+    parser.add_argument('--counter', type=str, required=False,
+        help="Type of counter to use; options are: \"Simple\"; \"Bounter,<size_mb>,<log_counting>\"; \"Sqeakr,<qbits>\"; \"Jellyfish,<initial_size>,<bits_per_value>\"")
     parser.add_argument('--prune', type=int, required=False,
         help='In each window, prune haplotypes by only processing up to this many variants. We recommend including this argument when ranking with the hybrid strategy for window sizes over 35.')
 

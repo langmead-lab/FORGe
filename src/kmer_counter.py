@@ -104,16 +104,14 @@ class SqueakrKmerCounter(object):
     """
     What is the size of the CQF?
     """
-    def __init__(self, name, r, qbits=10, seed=777):
+    def __init__(self, name, r, qbits=10):
         self.name = name
         self.r = r
         self.qbits = qbits
-        self.seed = seed
         self.db = lib.cqf_new(r, qbits)
-        self.nadded = 0
 
     def add(self, s):
-        self.nadded += squeakr.cqf_injest(self.db, s)
+        squeakr.cqf_injest(self.db, s)
 
     def query(self, s):
         return squeakr.cqf_query(self.db, s)
