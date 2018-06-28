@@ -1,9 +1,10 @@
-#!/usr/bin/enb python
+#!/usr/bin/env python
 
 """
 Utility functions
 """
 
+from future.utils import implements_iterator
 import re
 from variant import VariantSet
 
@@ -45,7 +46,8 @@ def vec_to_id(v, counts):
 all_acgt_re = re.compile("^[ACGTacgt]*$")
 
 
-class PseudocontigIterator:
+@implements_iterator
+class PseudocontigIterator(object):
     """ Loop over all pseudocontigs that contain a certain set of variants """
 
     def __init__(self, chrom_seq, variants, ids, r):
@@ -69,7 +71,7 @@ class PseudocontigIterator:
     def __iter__(self):
         return self
 
-    def next(self):
+    def __next__(self):
         """
         Return current read and iterate to the next one
         """
