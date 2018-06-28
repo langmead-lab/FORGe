@@ -3,3 +3,4 @@ cffi==1.11.5
 docopt==0.6.2
 bx-python==0.8.1
 bounter==1.0.1
+pytest==3.6.2
