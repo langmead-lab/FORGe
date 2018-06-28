@@ -1,4 +1,4 @@
-#! /usr/bin/env python2.7
+#!/usr/bin/env python
 
 """
 Build a graph genome from a linear reference genome and set of variants

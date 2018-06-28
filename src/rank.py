@@ -1,4 +1,4 @@
-#! /usr/bin/env python2.7
+#!/usr/bin/env python
 
 """
 Rank a set of variants for inclusion in a graph genome, from highest to lowest priority
