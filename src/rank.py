@@ -63,7 +63,7 @@ class VarRanker:
                                                      bits_per_value=bits_per_value)
         elif self.counter_type.startswith('Bounter'):
             toks = self.counter_type.split(',')
-            size_mb, log_counting = 1024, 1024
+            size_mb, log_counting = 1024, 8
             if len(toks) > 1:
                 size_mb = int(toks[1])
             if len(toks) > 2:
@@ -560,7 +560,7 @@ def go(args):
     r = args.window_size or 35
     o = args.output or 'ordered.txt'
     max_v = args.prune or r
-    counter_type = args.counter or 'Bounter,1024,1024'
+    counter_type = args.counter or 'Bounter,1024,8'
 
     logging.info('Reading genome')
     genome = read_genome(args.reference, target_chrom=args.chrom)
