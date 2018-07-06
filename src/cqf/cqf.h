@@ -8,7 +8,7 @@
 #ifndef _SQUEAKR_C_API_H_
 #define _SQUEAKR_C_API_H_
 
-#include "threadsafe-gqf/gqf.h"
+#include "gqf.h"
 
 #define FP_BUF_ELTS 100
 
@@ -38,7 +38,7 @@ void cqf_delete(struct flush_object *o);
 /**
  * Injest all the k-mers in a string into a CQF.
  */
-int string_injest(
+int cqf_string_injest(
     const char *read,
     size_t read_len,
     struct flush_object *obj);
@@ -46,7 +46,7 @@ int string_injest(
 /**
  * Populate int array with the counts of all the k-mers in the given string.
  */
-int string_query(
+int cqf_string_query(
     const char *read,
     size_t read_len,
     int64_t *count_array,
@@ -58,7 +58,7 @@ int string_query(
  * to min(FP_BUF_ELTS, range) pairs of uint64_ts.  Each pair consists of an
  * observed count and a true count.
  */
-int est_fpr(
+int cqf_est_fpr(
     int64_t *count_array,
     size_t count_array_len,
     struct flush_object *obj);

@@ -5,15 +5,16 @@ Interfaces to various k-mer counters
 """
 
 from __future__ import print_function
-import squeakr
 import re
 import string
 import pytest
-from bounter import bounter
 from collections import Counter
 import logging
 from _api import ffi, lib
 
+
+# at module level
+malloc = ffi.new_allocator(should_clear_after_alloc=False)
 
 try:
     _revcomp_trans = string.maketrans("ACGTacgt", "TGCAtgca")
@@ -55,7 +56,8 @@ class SimpleKmerCounter(object):
     def query(self, s):
         """ Query with each k-mer substring """
         assert isinstance(s, bytes)
-        return map(lambda kmer: -1 if kmer is None else self.counter.get(kmer), slice_canonical(s, self.r))
+        result = list(map(lambda kmer: -1 if kmer is None else self.counter.get(kmer), slice_canonical(s, self.r)))
+        return result, len(result)
 
 
 class BounterKmerCounter(object):
@@ -63,19 +65,78 @@ class BounterKmerCounter(object):
         if log_counting not in [None, 8, 1024]:
             raise ValueError('log_counting must be one of: None (for non-log), '
                              '8 (for 3-bit exact), 1024 (for 10-bit exact)')
+        if log_counting != 8:
+            raise ValueError('Only 8-bit log counting supported for now')
+        if log_counting == 8:
+            self.cell_size = cell_size = 1
+        elif log_counting == 1024:
+            self.cell_size = cell_size = 2
+        else:
+            self.cell_size = cell_size = 4
+        self.width = 1 << (size_mb * (2 ** 20) // (cell_size * 8 * 2)).bit_length()
+        self.depth = (size_mb * (2 ** 20)) // (self.width * cell_size)
         self.name = name
         self.r = r
-        self.counter = bounter(size_mb=size_mb, need_iteration=False, need_counts=True, log_counting=log_counting)
+        self.result_len = 1024
+        self.results = malloc("int64_t[]", self.result_len)
+        self.sketch = lib.bounter_new(self.width, self.depth)
+
+    def close(self):
+        lib.bounter_delete(self.sketch)
 
     def add(self, s):
         """ Add canonicalized version of each k-mer substring """
         assert isinstance(s, bytes)
-        self.counter.update(filter(lambda x: x is not None, slice_canonical(s, self.r)))
+        lib.bounter_string_injest(self.sketch, self.r, s, len(s))
 
     def query(self, s):
         """ Query with each k-mer substring """
         assert isinstance(s, bytes)
-        return map(lambda kmer: -1 if kmer is None else self.counter[kmer], slice_canonical(s, self.r))
+        result_len = len(s)-self.r+1
+        if result_len > self.result_len:
+            del self.results
+            self.result_len = result_len
+            self.results = malloc("int64_t[]", self.result_len)
+        lib.bounter_string_query(self.sketch, self.r, s, len(s), self.results, result_len)
+        return self.results, result_len
+
+
+class SqueakrKmerCounter(object):
+    """
+    What is the size of the CQF?
+    """
+    def __init__(self, name, r, qbits=10):
+        self.name = name
+        self.r = r
+        self.qbits = qbits
+        self.result_len = 1024
+        self.results = malloc("int64_t[]", self.result_len)
+        self.db = lib.cqf_new(r, qbits)
+
+    def close(self):
+        lib.cqf_delete(self.db)
+
+    def add(self, s):
+        """ Add canonicalized version of each k-mer substring """
+        assert isinstance(s, bytes)
+        lib.cqf_string_injest(s, len(s), self.db)
+
+    def query(self, s):
+        """ Query with each k-mer substring """
+        assert isinstance(s, bytes)
+        result_len = len(s)-self.r+1
+        if result_len > self.result_len:
+            del self.results
+            self.result_len = result_len
+            self.results = malloc("int64_t[]", self.result_len)
+        lib.cqf_string_query(s, len(s), self.results, result_len, self.db)
+        return self.results, result_len
+
+    def report_fpr(self):
+        results, results_len = lib.cqf_est_fpr(self.db)
+        for i in range(0, results_len, 2):
+            nobs, ntrue = results[i], results[i+1]
+            logging.info('%d %d %d' % (nobs-ntrue, nobs, ntrue))
 
 
 class JellyfishKmerCounter(object):
@@ -100,34 +161,12 @@ class JellyfishKmerCounter(object):
         return res
 
 
-class SqueakrKmerCounter(object):
-    """
-    What is the size of the CQF?
-    """
-    def __init__(self, name, r, qbits=10):
-        self.name = name
-        self.r = r
-        self.qbits = qbits
-        self.db = lib.cqf_new(r, qbits)
-
-    def add(self, s):
-        squeakr.cqf_injest(self.db, s)
-
-    def query(self, s):
-        return squeakr.cqf_query(self.db, s)
-
-    def report_fpr(self):
-        results, results_len = squeakr.cqf_est_fpr(self.db)
-        for i in range(0, results_len, 2):
-            nobs, ntrue = results[i], results[i+1]
-            logging.info('%d %d %d' % (nobs-ntrue, nobs, ntrue))
-
-
 def pytest_generate_tests(metafunc):
     if 'counter_class' in metafunc.fixturenames:
         # Add classes to list as they are added
         #counter_classes = [SimpleKmerCounter, BounterKmerCounter, SqueakrKmerCounter]
-        counter_classes = [SimpleKmerCounter, BounterKmerCounter]
+        #counter_classes = [SimpleKmerCounter, BounterKmerCounter]
+        counter_classes = [SimpleKmerCounter, SqueakrKmerCounter, BounterKmerCounter]
         metafunc.parametrize("counter_class", counter_classes, indirect=True)
 
 
@@ -166,23 +205,25 @@ def test_slice_and_canonicalize():
 def test_counter_1(counter_class):
     cnt = counter_class('Test', 4)
     cnt.add(b'ACGT')
-    res = list(cnt.query(b'ACGT'))
-    assert len(res) == 1
+    res, reslen = cnt.query(b'ACGT')
+    assert reslen == 1
     assert res[0] == 1
 
     cnt.add(b'ACNT')
-    res = list(cnt.query(b'ACGT'))
-    assert len(res) == 1
+    res, reslen = cnt.query(b'ACGT')
+    assert reslen == 1
     assert res[0] == 1  # cumulative
 
 
 def test_counter_2(counter_class):
     cnt = counter_class('Test', 8)
     cnt.add(b'ACGTACGTNACGTACGT')
-    res = list(cnt.query(b'ACGTACGTN'))
-    assert len(res) == 2
-    assert res[0] == 2
+    #         ACGTACGT
+    #                  ACGTACGT
+    res, reslen = cnt.query(b'ACGTACGTN')
+    assert reslen == 2
     assert res[1] == -1
+    assert res[0] == 2
 
 
 def test_counter_3(counter_class):
@@ -193,13 +234,28 @@ def test_counter_3(counter_class):
     #          2222  x  7777    GTAC x 2
     #           3333 x   8888   TACG -> CGTA x 2
     #            4444x    9999  ACGT x 2
-    res = list(cnt.query(b'ACGTACG'))
+    res, reslen = cnt.query(b'ACGTACG')
     #                0000
     #                 1111
     #                  2222
     #                   3333
-    assert len(res) == 4
+    assert reslen == 4
     assert res[0] == 4  # ACGT
     assert res[1] == 4  # CGTA
     assert res[2] == 2  # GTAC
     assert res[3] == 4  # TACG -> CGTA
+
+
+if __name__ == '__main__':
+    if False:
+        bk = BounterKmerCounter('blah', 8, size_mb=128)
+        bk.add(b'ACGTACGTNACGTACGT')
+        res = bk.query(b'ACGTACGTN')
+        print(res)
+        bk.close()
+    else:
+        bk = SqueakrKmerCounter('blah', 4, 10)
+        bk.add(b'ACGTACGTNACGTACGT')
+        res = bk.query(b'ACGTACGTN')
+        print(res)
+        bk.close()

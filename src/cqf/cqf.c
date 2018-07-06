@@ -5,13 +5,13 @@
  * A C API for the CQF.  Required rewriting some C++ functions from Squeakr in
  * C, but changes are minor overall.  Intended for use with CFFI.  As of now,
  * only supports creating an empty CQF (qf_init), populating it with k-mers
- * from a longer string (string_injest), and querying it with k-mers from a
- * string (string_query).  It does not (yet) allow reading or writing CQFs to
+ * from a longer string (cqf_string_injest), and querying it with k-mers from a
+ * string (cqf_string_query).  It does not (yet) allow reading or writing CQFs to
  * disk, or injesting/querying from a file. 
  *
  * See:
  *
- * squeakr_c_api.h -- prototypes for string_injest and string_query
+ * squeakr_c_api.h -- prototypes for cqf_string_injest and cqf_string_query
  *
  * squeakr_build.py -- builds the C code & C/Pyhton interface using CFFI
  * squeakr_query.py -- example of how to allocate, populate and query a CQF
@@ -25,7 +25,7 @@
  *
  */
 
-#include "squeakr_c_api.h"
+#include "cqf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -138,7 +138,7 @@ typedef struct {
 /**
  * Set to all 0s.
  */
-void b256_clear(b256 *b) {
+static void b256_clear(b256 *b) {
 	memset(b, 0, 32);
 }
 
@@ -146,7 +146,7 @@ void b256_clear(b256 *b) {
  * Left-shift by 2 bits and mask so that DNA string is no longer than k.  Put
  * result in dst.
  */
-void b256_lshift_and_mask(b256 *b, size_t k) {
+static void b256_lshift_and_mask(b256 *b, size_t k) {
 	k *= 2;
 	int word = (int)(k >> 6);
 	for(int i = 3; i > 0; i--) {
@@ -161,7 +161,7 @@ void b256_lshift_and_mask(b256 *b, size_t k) {
 /**
  * Left-shift by 2 bits, in place.
  */
-void b256_lshift(b256 *b) {
+static void b256_lshift(b256 *b) {
 	for(int i = 3; i > 0; i--) {
 		b->u64s[i] = (b->u64s[i] << 2) | (b->u64s[i-1] >> 62);
 	}
@@ -171,7 +171,7 @@ void b256_lshift(b256 *b) {
 /**
  * Right-shift by 2 bits, in place.
  */
-void b256_rshift_2(b256 *b) {
+static void b256_rshift_2(b256 *b) {
 	for(int i = 0; i < 3; i++) {
 		b->u64s[i] = (b->u64s[i] >> 2) | (b->u64s[i+1] << 62);
 	}
@@ -181,14 +181,14 @@ void b256_rshift_2(b256 *b) {
 /**
  * OR the given value into the low bits of b, in place.
  */
-void b256_or_low(b256 *b, uint8_t val) {
+static void b256_or_low(b256 *b, uint8_t val) {
 	b->u64s[0] |= val;
 }
 
 /**
  * OR the given value into given bitpair of b, in place.
  */
-void b256_or_at(b256 *b, uint8_t val, int k) {
+static void b256_or_at(b256 *b, uint8_t val, int k) {
 	assert(k < 128);
 	assert(val < 4);
 	k *= 2;
@@ -199,7 +199,7 @@ void b256_or_at(b256 *b, uint8_t val, int k) {
 /**
  * Reverse complement the length-k DNA string in src, putting result in dst.
  */
-void b256_revcomp(const b256 *src, b256 *dst, size_t k) {
+static void b256_revcomp(const b256 *src, b256 *dst, size_t k) {
 	// presumably *dst is all 0s
 	assert(k > 0);
 	size_t lo_word = 0, lo_bitoff = 0;
@@ -239,7 +239,7 @@ void b256_revcomp(const b256 *src, b256 *dst, size_t k) {
 /**
  * Return the pointer for whichever k-mer is minimal.
  */
-b256 *b256_min(b256 *a, b256 *b) {
+static b256 *b256_min(b256 *a, b256 *b) {
 	for(int i = 3; i >= 0; i--) {
 		if(a->u64s[i] < b->u64s[i]) {
 			return a;
@@ -253,7 +253,7 @@ b256 *b256_min(b256 *a, b256 *b) {
 /**
  * Given a string, extract every k-mer, canonicalize, and add to the QF.
  */
-int string_injest(
+int cqf_string_injest(
     const char *read, // string whose k-mers to add
     size_t read_len,  // length of string
     struct flush_object *obj)
@@ -268,42 +268,38 @@ int string_injest(
 		                "%u was specified\n", k);
 		return -1;
 	}
-	size_t left_chop = 0;
 	int nadded = 0;
-	do {
-		if (read_len - left_chop < k) {
-			return nadded; // start with the next read if length is smaller than K
-		}
+	int i = 0;
+	for(; i < read_len; i++) {
 		b256 first, first_rev, *item = NULL;
 		b256_clear(&first);
 		b256_clear(&first_rev);
-		for(int i = 0; i < k; i++) { // First kmer
-			uint8_t curr = map_base(read[left_chop + i]);
+		// Phase 1: get initial k-mer
+		int do_continue = 0;
+		for(int start = i; i < start + k; i++) { // First kmer
+			uint8_t curr = map_base(read[i]);
 			if(NON_ACGT(curr)) {
-				left_chop += (i+1);
-				if(read_len - left_chop < k) {
-				    return nadded;
-				}
-				continue;
+				do_continue = 1;
+				break;
 			}
 			b256_or_low(&first, curr);
 			b256_lshift(&first);
 		}
+		if(do_continue) {
+			continue;
+		}
 		b256_rshift_2(&first);
 		b256_revcomp(&first, &first_rev, k);
 		item = b256_min(&first, &first_rev);
-		uint64_t hash = MurmurHash64A((void*)item, 32, seed);
-		hash %= range;
+		uint64_t hash = MurmurHash64A((void*)item, 32, seed) % range;
 		qf_insert(obj->main_qf, hash, 0, 1, false, false);
 		nadded++;
-
+		// Phase 2: get all subsequent k-mers
 		b256 next = first, next_rev = first_rev;
-
-		for(uint32_t i = k; i + left_chop < read_len; i++) {
-			uint8_t curr = map_base(read[i + left_chop]);
+		for(; i < read_len; i++) {
+			uint8_t curr = map_base(read[i]);
 			if(NON_ACGT(curr)) {
-				left_chop += (i+1);
-				continue;
+				break;
 			}
 			b256_lshift_and_mask(&next, k);
 			b256_or_low(&next, curr);
@@ -311,12 +307,11 @@ int string_injest(
 			b256_rshift_2(&next_rev);
 			b256_or_at(&next_rev, tmp, k - 1);
 			item = b256_min(&next, &next_rev);
-			hash = MurmurHash64A((void*)item, 32, seed);
-			hash %= range;
+			hash = MurmurHash64A((void*)item, 32, seed) % range;
 			qf_insert(obj->main_qf, hash, 0, 1, false, false);
 			nadded++;
 		}
-	} while(false);
+	}
 	return nadded;
 }
 
@@ -324,7 +319,7 @@ int string_injest(
  * Assumes no locking is needed, i.e. that no other thread
  * is trying to update the CQF.
  */
-int string_query(
+int cqf_string_query(
     const char *read_orig,
     size_t read_len_orig,
     int64_t *count_array,
@@ -393,7 +388,7 @@ int string_query(
 		for(uint32_t i = 0; i < read_len; i++) { //next kmers
 			uint8_t curr = map_base(read[i]);
 			if(NON_ACGT(curr)) {
-				for(int j = 0; j < obj->ksize; j++) {
+				for(int j = 0; j < obj->ksize && (cur_count - count_array) < count_array_len; j++) {
 					*cur_count++ = -1;
 				}
 				read++;
@@ -431,7 +426,7 @@ int string_query(
  * to min(FP_BUF_ELTS, range) pairs of uint64_ts.  Each pair consists of an
  * observed count and a true count.
  */
-int est_fpr(
+int cqf_est_fpr(
     int64_t *count_array,
     size_t count_array_len,
     struct flush_object *obj)
@@ -470,15 +465,15 @@ static void quick_tests(unsigned seed) {
 		//                  0123
 		for(int i = 0; i < 3; i++) {
 			QF cf; struct flush_object obj; init(&cf, &obj, 4, 10);
-			string_injest(text, i + 4, &obj);
-			string_query(text, i+4, results, i+1, &obj);
+			cqf_string_injest(text, i + 4, &obj);
+			cqf_string_query(text, i+4, results, i+1, &obj);
 			for(int j = 0; j <= i; j++) {
 				assert(results[j] == 1);
 			}
 		}
 		QF cf; struct flush_object obj; init(&cf, &obj, 4, 10);
-		string_injest(text, 7, &obj);
-		string_query(text, 7, results, 4, &obj);
+		cqf_string_injest(text, 7, &obj);
+		cqf_string_query(text, 7, results, 4, &obj);
 		assert(results[0] == 1);
 		assert(results[1] == 2);
 		assert(results[2] == 1);
@@ -496,7 +491,7 @@ static void quick_tests(unsigned seed) {
 			*cur++ = "ACGT"[rand() % 4];
 		}
 		text[textlen+ksize-1] = '\0';
-		string_injest(text, textlen + ksize - 1, &obj);
+		cqf_string_injest(text, textlen + ksize - 1, &obj);
 	}
 }
 
@@ -519,7 +514,7 @@ int main(int argc, char *argv[]) {
 	init(&cf, &obj, ksize, qbits);
 
 	fprintf(stderr, "Building reference from: %s\n", argv[3]);
-	string_injest(argv[3], strlen(argv[3]), &obj);
+	cqf_string_injest(argv[3], strlen(argv[3]), &obj);
 
 	for(size_t i = 4; i < argc; i++) {
 		size_t len = strlen(argv[i]);
@@ -529,7 +524,7 @@ int main(int argc, char *argv[]) {
 			fprintf(stderr, "ERROR: could not allocate results\n");
 			return 1;
 		}
-		int nres = string_query(argv[i], len, results, results_len, &obj);
+		int nres = cqf_string_query(argv[i], len, results, results_len, &obj);
 		assert(nres == (int)results_len);
 		for(int j = 0; j < nres; j++) {
 			fprintf(stderr, "[%d]: %lld\n", j, results[j]);

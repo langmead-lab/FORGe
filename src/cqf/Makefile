@@ -2,15 +2,15 @@
 
 CFLAGS += -std=gnu99 -DSQUEAKR_TEST_MAIN -O0 -g
 
-squeakr-test: squeakr_c_api.o gqf.o
+cqf: cqf.o gqf.o
 	$(CC) $^ -lm -o $@
 
-squeakr-c-api.o: squeakr_c_api.c squeakr_c_api.h
+cqf.o: cqf.c cqf.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $<
 
-gqf.o: threadsafe-gqf/gqf.c threadsafe-gqf/gqf.h
+gqf.o: gqf.c gqf.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $<
 
 .PHONY: clean
 clean:
-	rm -f squeakr_c_api.o gqf.o squeakr-test
+	rm -f *.o cqf

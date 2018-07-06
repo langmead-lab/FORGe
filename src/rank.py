@@ -11,8 +11,21 @@ import kmer_counter
 from operator import itemgetter
 from util import PseudocontigIterator, vec_to_id, get_next_vector
 import re
+import cProfile
 
-VERSION = '0.0.1'
+
+VERSION = '0.0.2'
+
+
+def profileit(func):
+    def wrapper(*args, **kwargs):
+        datafn = func.__name__ + ".profile" # Name the data file sensibly
+        prof = cProfile.Profile()
+        retval = prof.runcall(func, *args, **kwargs)
+        prof.dump_stats(datafn)
+        return retval
+
+    return wrapper
 
 
 class VarRanker:
@@ -174,6 +187,7 @@ class VarRanker:
         logging.info('  Avg probability of reads in ref:  %f' % self.wgt_ref)
         logging.info('  Avg probability of added reads:   %f' % self.wgt_added)
 
+    @profileit
     def count_kmers_ref(self):
         logging.info('  Counting reference k-mers')
         self.h_ref = self.counter_maker('Ref')
