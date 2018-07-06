@@ -1,5 +1,7 @@
 #!gmake
 
+CFLAGS = -O0 -g -Wall -Wextra -Werror -pedantic
+
 bounter: bounter.o murmur3.o
 	$(CC) -o $@ $^ $(CFLAGS)
 
