@@ -6,8 +6,21 @@ Utility functions
 
 from future.utils import implements_iterator
 import re
+import string
 from variant import VariantSet
 from collections import OrderedDict
+
+
+try:
+    _revcomp_trans = string.maketrans("ACGTacgt", "TGCAtgca")
+except AttributeError:
+    _revcomp_trans = bytes.maketrans(b"ACGTacgt", b"TGCAtgca")
+
+_non_acgt = re.compile(b'[^ACGTacgt]')
+
+
+def revcomp(x):
+    return x[::-1].translate(_revcomp_trans)
 
 
 class Quantiler(object):
