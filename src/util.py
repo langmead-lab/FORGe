@@ -7,6 +7,39 @@ Utility functions
 from future.utils import implements_iterator
 import re
 from variant import VariantSet
+from collections import OrderedDict
+
+
+class Quantiler(object):
+
+    def __init__(self):
+        self.h = OrderedDict()
+
+    def add(self, val):
+        self.h[val] = self.h.get(val, 0) + 1
+
+    def quantiles(self):
+        size = sum(self.h.values())
+        idx = {'min': 0,
+               'q1': size / 4,
+               'q2': size / 2,
+               'q3': size * 3 / 4,
+               'max': size-1}
+
+        def accumulate(it):
+            tot = 0
+            for x in it:
+                tot += x
+                yield tot
+
+        def get_val(d, i):
+            return next(k for k, x in zip(d, accumulate(d.values())) if i < x)
+
+        return {k: get_val(self.h, v) for k, v in idx.items()}
+
+    def __str__(self):
+        qu = self.quantiles()
+        return '%d -- [%d, %d, %d] -- %d' % (qu['min'], qu['q1'], qu['q2'], qu['q3'], qu['max'])
 
 
 def get_next_vector(k, counts, v):
@@ -217,3 +250,15 @@ def test_pc_iter_4():
     pi = PseudocontigIterator(seq, variants, [0], 4)
     pcs = [x for x in pi]
     assert 0 == len(pcs)
+
+
+def test_quantiler_1():
+    q = Quantiler()
+    for i in range(100):
+        q.add(i)
+    qu = q.quantiles()
+    assert 0 == qu['min']
+    assert 25 == qu['q1']
+    assert 50 == qu['q2']
+    assert 75 == qu['q3']
+    assert 99 == qu['max']
