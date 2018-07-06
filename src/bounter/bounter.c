@@ -12,21 +12,14 @@
 static inline uint8_t map_base(char base) {
     switch(base) {
         case 'A': case 'a': { return 0; }
-        case 'T': case 't': { return 3; }
         case 'C': case 'c': { return 1; }
         case 'G': case 'g': { return 2; }
+        case 'T': case 't': { return 3; }
         default: { return 4; }
     }
 }
 
 #define NON_ACGT(b) (b < 0 || b > 3)
-
-/* Return the reverse complement of a base */
-static inline int reverse_complement_base(int x) {
-    assert(x < 4);
-    assert(x >= 0);
-    return 3 ^ x;
-}
 
 typedef struct {
     uint64_t u64s[4];
@@ -48,11 +41,9 @@ static void b256_lshift_and_mask(b256 *b, size_t k) {
     int word = (int)(k >> 6);
     for(int i = 3; i > 0; i--) {
         b->u64s[i] = (b->u64s[i] << 2) | (b->u64s[i-1] >> 62);
-        if(i == word) {
-            b->u64s[i] &= BITMASK(k & 63);
-        }
     }
     b->u64s[0] <<= 2;
+    b->u64s[word] &= BITMASK(k & 63);
 }
 
 /**
@@ -112,7 +103,7 @@ static void b256_revcomp(const b256 *src, b256 *dst, size_t k) {
         assert(hi_bitoff >= 0);
         assert(hi_bitoff < 64);
         int base = (src->u64s[lo_word] >> lo_bitoff) & 3;
-        uint64_t rcbase = reverse_complement_base(base);
+        uint64_t rcbase = base ^ 3;
         assert(rcbase < 4);
         dst->u64s[hi_word] |= rcbase << hi_bitoff;
         if(lo_bitoff == 62) {
@@ -144,7 +135,7 @@ static b256 *b256_min(b256 *a, b256 *b) {
             return b;
         }
     }
-    return a;
+    return a; // equal
 }
 
 /**
@@ -163,7 +154,7 @@ int bounter_string_injest(
     }
     int nadded = 0;
     int i = 0;
-    for(; i < read_len; i++) {
+    for(; (size_t)i < read_len; i++) {
         b256 first, first_rev, *item = NULL;
         b256_clear(&first);
         b256_clear(&first_rev);
@@ -188,14 +179,14 @@ int bounter_string_injest(
         nadded++;
         // Phase 2: get all subsequent k-mers
         b256 next = first, next_rev = first_rev;
-        for(; i < read_len; i++) {
+        for(; (size_t)i < read_len; i++) {
             uint8_t curr = map_base(read[i]);
             if(NON_ACGT(curr)) {
                 break;
             }
             b256_lshift_and_mask(&next, k);
             b256_or_low(&next, curr);
-            uint64_t tmp = reverse_complement_base(curr);
+            uint64_t tmp = curr ^ 3;
             b256_rshift_2(&next_rev);
             b256_or_at(&next_rev, tmp, k - 1);
             item = b256_min(&next, &next_rev);
@@ -233,7 +224,7 @@ int bounter_string_query(
     const char *read = read_orig;
     size_t read_len = read_len_orig;
     do {
-        if(read_len < k) {
+        if(read_len < (size_t)k) {
             return (int)(cur_count - count_array);
         }
         b256 first, first_rev, *item = NULL;
@@ -244,9 +235,9 @@ int bounter_string_query(
             uint8_t curr = map_base(read[i]);
             if(NON_ACGT(curr)) {
                 // append -1s for k-mers that include a non-ACGT
-                for(int j = 0; j <= i && j + k <= read_len; j++) {
+                for(int j = 0; j <= i && j + k <= (int)read_len; j++) {
                     *cur_count++ = -1;
-                    assert(cur_count - count_array <= count_array_len);
+                    assert((size_t)(cur_count - count_array) <= count_array_len);
                 }
                 read += (i+1);
                 read_len -= (i+1);
@@ -265,14 +256,14 @@ int bounter_string_query(
         item = b256_min(&first, &first_rev);
         int64_t count = CMS_Log8_getitem(sketch, (char *)item, sizeof(*item));
         *cur_count++ = count;
-        if(cur_count - count_array > count_array_len) {
+        if((size_t)(cur_count - count_array) > count_array_len) {
             fprintf(stderr, "Wrote off end of count array\n");
             exit(1);
         }
         
         b256 next = first, next_rev = first_rev;
         read += k;
-        if(read_len < k) {
+        if(read_len < (size_t)k) {
             fprintf(stderr, "Query string became too short\n");
             exit(1);
         }
@@ -281,7 +272,7 @@ int bounter_string_query(
         for(uint32_t i = 0; i < read_len; i++) { //next kmers
             uint8_t curr = map_base(read[i]);
             if(NON_ACGT(curr)) {
-                for(int j = 0; j < k && (cur_count - count_array) < count_array_len; j++) {
+                for(int j = 0; j < k && (size_t)(cur_count - count_array) < count_array_len; j++) {
                     *cur_count++ = -1;
                 }
                 read++;
@@ -291,13 +282,13 @@ int bounter_string_query(
             }
             b256_lshift_and_mask(&next, k);
             b256_or_low(&next, curr);
-            uint64_t tmp = reverse_complement_base(curr);
+            uint64_t tmp = curr ^ 3;
             b256_rshift_2(&next_rev);
             b256_or_at(&next_rev, tmp, k - 1);
             item = b256_min(&next, &next_rev);
             count = CMS_Log8_getitem(sketch, (char *)item, sizeof(*item));
             *cur_count++ = count;
-            if(cur_count - count_array > count_array_len) {
+            if((size_t)(cur_count - count_array) > count_array_len) {
                 fprintf(stderr, "Wrote off end of count array\n");
                 exit(1);
             }
@@ -316,6 +307,10 @@ static void quick_tests(unsigned seed) {
         int64_t results[4];
         const char *text = "ACGTACG";
         //                  0123
+        //                  ACGT (1)
+        //                   CGTA (2)
+        //                    GTAC (1)
+        //                     TACG (2)
         for(int i = 0; i < 3; i++) {
             CMS_Log8_init(&sketch, 1024, 10);
             int nadded = bounter_string_injest(&sketch, 4, text, i + 4);
@@ -335,7 +330,19 @@ static void quick_tests(unsigned seed) {
         assert(results[3] == 2);
         CMS_Log8_dealloc(&sketch);
     }
-    
+
+    {
+        const char *text  = "TCCCGGGAGGGA";
+        const char *query = "TCCCNGGGA";
+        int64_t results[6];
+        CMS_Log8_init(&sketch, 1024, 10);
+        bounter_string_injest(&sketch, 4, text, 12);
+        bounter_string_query(&sketch, 4, query, 9, results, 6);
+        assert(results[0] == 3);
+        assert(results[5] == 3);
+        CMS_Log8_dealloc(&sketch);
+    }
+
     {
         CMS_Log8_init(&sketch, 1024, 10);
         srand(seed);
@@ -375,7 +382,7 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Building reference from: %s\n", ref);
     bounter_string_injest(&sketch, ksize, ref, strlen(ref));
 
-    for(size_t i = 5; i < argc; i++) {
+    for(int i = 5; i < argc; i++) {
         size_t len = strlen(argv[i]);
         size_t results_len = len - ksize + 1;
         int64_t *results = (int64_t*)malloc(sizeof(int64_t) * results_len);

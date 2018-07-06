@@ -151,11 +151,9 @@ static void b256_lshift_and_mask(b256 *b, size_t k) {
 	int word = (int)(k >> 6);
 	for(int i = 3; i > 0; i--) {
 		b->u64s[i] = (b->u64s[i] << 2) | (b->u64s[i-1] >> 62);
-		if(i == word) {
-			b->u64s[i] &= BITMASK(k & 63);
-		}
 	}
 	b->u64s[0] <<= 2;
+	b->u64s[word] &= BITMASK(k & 63);
 }
 
 /**
@@ -479,7 +477,18 @@ static void quick_tests(unsigned seed) {
 		assert(results[2] == 1);
 		assert(results[3] == 2);
 	}
-	
+
+    {
+        QF cf; struct flush_object obj; init(&cf, &obj, 4, 10);
+        const char *text  = "TCCCGGGAGGGA";
+        const char *query = "TCCCNGGGA";
+        int64_t results[6];
+        cqf_string_injest(text, 12, &obj);
+        cqf_string_query(query, 9, results, 6, &obj);
+        assert(results[0] == 3);
+        assert(results[5] == 3);
+    }
+
 	{
 		QF cf; struct flush_object obj; init(&cf, &obj, 60, 10);
 		srand(seed);
