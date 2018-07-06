@@ -24,33 +24,8 @@ from _api import ffi, lib
 import math
 import random
 import logging
+from collections import Counter
 from docopt import docopt
-
-
-def cqf_injest(db, s):
-    ksize = db.ksize
-    ninjested = lib.string_injest(s, len(s), db)
-    if random.random() < 0.001:
-        first_kmer = s[:ksize]
-        assert len(first_kmer) == ksize
-        results = cqf_query(db, first_kmer)
-        logging.info('"%s" has occurred %d times' % (first_kmer, results[0]))
-    return ninjested
-
-
-def cqf_query(db, st):
-    """
-    Query the given CQF with k-mers from the given string.  Return a C array
-    of int64_t giving the count for each k-mer.  The C array is not the same
-    as a Python list, but could be immediately converted to one using
-    list(...) if desired.
-    """
-    stlen = len(st)
-    results_len = stlen - db.ksize + 1
-    results = ffi.new('int64_t[]', results_len)
-    nresults = lib.string_query(st, stlen, results, results_len, db)
-    assert nresults == results_len
-    return results
 
 
 def cqf_est_fpr(db):
@@ -62,30 +37,31 @@ def cqf_est_fpr(db):
     """
     results_len = 100 # lib.FP_BUF_ELTS*2
     results = ffi.new('int64_t[]', results_len)
-    lib.est_fpr(results, results_len, db)
+    lib.cqf_est_fpr(results, results_len, db)
     return results, results_len
 
 
 def test_simple_query_1():
-    db = lib.cqf_new(4, 10);
-    lib.string_injest(b'ACGT', 4, db)
+    db = lib.cqf_new(4, 10)
+    lib.cqf_string_injest(b'ACGT', 4, db)
     results = ffi.new('int64_t[]', 1)
-    nresults = lib.string_query(b'ACGT', 4, results, 1, db)
+    nresults = lib.cqf_string_query(b'ACGT', 4, results, 1, db)
     assert 1 == nresults
     assert 1 == results[0]
     lib.cqf_delete(db)
 
 
 def test_query_with_ns():
-    db = lib.cqf_new(4, 10);
+    k = 4
+    db = lib.cqf_new(k, 10)
     to_injest = b'ACGTACGT'
-    lib.string_injest(to_injest, len(to_injest), db)
+    lib.cqf_string_injest(to_injest, len(to_injest), db)
     to_query = b'ACGTNACGTNACGT'
     #           01234567890123
     stlen = len(to_query)
-    results_len = stlen - db.ksize + 1
+    results_len = stlen - k + 1
     results = ffi.new('int64_t[]', results_len)
-    nresults = lib.string_query(to_query, stlen, results, results_len, db)
+    nresults = lib.cqf_string_query(to_query, stlen, results, results_len, db)
     assert nresults == results_len
     assert 2 == results[0]
     assert -1 == results[1]
@@ -110,16 +86,16 @@ def fpr_test(nkeys, seed, qbits, ksize, nchunks=None):
     chunk_sz = int(nkeys / nchunks)
     so_far = 0
     random.seed(seed)
-    #fpr_results = ffi.new('int64_t[]', 200)
+    fpr_results = ffi.new('int64_t[]', 200)
     for i in range(nchunks):
         st = b''.join([random.choice([b'A', b'C', b'G', b'T']) for _ in range(ksize + chunk_sz - 1)])
         print(st)
-        lib.string_injest(st, len(st), db)
-        #print('Injested keys %d -- %d' % (so_far, so_far + chunk_sz))
+        lib.cqf_string_injest(st, len(st), db)
+        print('Injested keys %d -- %d' % (so_far, so_far + chunk_sz))
         so_far += chunk_sz
-        #lib.est_fpr(fpr_results, 100, db)
-        #cnt = Counter(map(lambda x: x[1] - x[0], ((fpr_results[i], fpr_results[i+1]) for i in range(0, 100, 2))))
-        #print(cnt)
+        lib.est_fpr(fpr_results, 100, db)
+        cnt = Counter(map(lambda x: x[1] - x[0], ((fpr_results[i], fpr_results[i+1]) for i in range(0, 100, 2))))
+        print(cnt)
     lib.cqf_delete(db)
 
 
