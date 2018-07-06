@@ -6,26 +6,18 @@ Interfaces to various k-mer counters
 
 from __future__ import print_function
 import re
-import string
 import pytest
 from collections import Counter
 import logging
+import random
+from util import revcomp
 from _api import ffi, lib
 
 
 # at module level
 malloc = ffi.new_allocator(should_clear_after_alloc=False)
 
-try:
-    _revcomp_trans = string.maketrans("ACGTacgt", "TGCAtgca")
-except AttributeError:
-    _revcomp_trans = bytes.maketrans(b"ACGTacgt", b"TGCAtgca")
-
 _non_acgt = re.compile(b'[^ACGTacgt]')
-
-
-def revcomp(x):
-    return x[::-1].translate(_revcomp_trans)
 
 
 def slice_canonical(st, r):
@@ -43,7 +35,7 @@ class SimpleKmerCounter(object):
     Use collections.Counter and do exact counting
     """
 
-    def __init__(self,  name, r):
+    def __init__(self, name, r):
         self.name = name
         self.r = r
         self.counter = Counter()
@@ -51,12 +43,15 @@ class SimpleKmerCounter(object):
     def add(self, s):
         """ Add canonicalized version of each k-mer substring """
         assert isinstance(s, bytes)
-        self.counter.update(filter(lambda x: x is not None, slice_canonical(s, self.r)))
+        kmers = list(filter(lambda x: x is not None, slice_canonical(s, self.r)))
+        self.counter.update(kmers)
+        return len(kmers)
 
     def query(self, s):
         """ Query with each k-mer substring """
         assert isinstance(s, bytes)
-        result = list(map(lambda kmer: -1 if kmer is None else self.counter.get(kmer), slice_canonical(s, self.r)))
+        result = list(map(lambda kmer: -1 if kmer is None else self.counter.get(kmer, 0), slice_canonical(s, self.r)))
+        assert all(map(lambda x: x is not None, result)), (s, result)
         return result, len(result)
 
 
@@ -166,7 +161,7 @@ def pytest_generate_tests(metafunc):
         # Add classes to list as they are added
         #counter_classes = [SimpleKmerCounter, BounterKmerCounter, SqueakrKmerCounter]
         #counter_classes = [SimpleKmerCounter, BounterKmerCounter]
-        counter_classes = [SimpleKmerCounter, SqueakrKmerCounter, BounterKmerCounter]
+        counter_classes = [SimpleKmerCounter, BounterKmerCounter]
         metafunc.parametrize("counter_class", counter_classes, indirect=True)
 
 
@@ -246,16 +241,26 @@ def test_counter_3(counter_class):
     assert res[3] == 4  # TACG -> CGTA
 
 
-if __name__ == '__main__':
-    if False:
-        bk = BounterKmerCounter('blah', 8, size_mb=128)
-        bk.add(b'ACGTACGTNACGTACGT')
-        res = bk.query(b'ACGTACGTN')
-        print(res)
-        bk.close()
-    else:
-        bk = SqueakrKmerCounter('blah', 4, 10)
-        bk.add(b'ACGTACGTNACGTACGT')
-        res = bk.query(b'ACGTACGTN')
-        print(res)
-        bk.close()
+def _test_random(cnt, k=4, len=1000):
+    stlen = 10000
+    random.seed(21361)
+    st1 = b''.join([random.choice([b'A', b'C', b'G', b'T']) for _ in range(stlen)])
+    st2 = b''.join([random.choice([b'A', b'C', b'G', b'T']) for _ in range(stlen)])
+    results_len = stlen - k + 1
+    cnt.add(st1)
+    results, results_len2 = cnt.query(st2)
+    assert results_len == results_len2
+    for i in range(results_len-k+1):
+        km_orig = st2[i:i+k]
+        km = min(km_orig, revcomp(km_orig))
+        true_count = st1.count(km)
+        if true_count < 8:
+            assert results[i] >= true_count, (results[i], km_orig, km, st1.count(km_orig), st1.count(revcomp(km_orig)))
+
+
+def test_random_k4_10000(counter_class, k=4):
+    _test_random(counter_class('Test', k), k, 10000)
+
+
+def test_random_k100_100000(counter_class, k=100):
+    _test_random(counter_class('Test', k), k, 100000)
