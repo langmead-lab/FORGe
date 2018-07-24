@@ -7,6 +7,7 @@ Utility functions
 from future.utils import implements_iterator
 import re
 import string
+import cProfile
 from variant import VariantSet
 from collections import OrderedDict
 
@@ -21,6 +22,17 @@ _non_acgt = re.compile(b'[^ACGTacgt]')
 
 def revcomp(x):
     return x[::-1].translate(_revcomp_trans)
+
+
+def profileit(func):
+    def wrapper(*args, **kwargs):
+        datafn = func.__name__ + ".profile" # Name the data file sensibly
+        prof = cProfile.Profile()
+        retval = prof.runcall(func, *args, **kwargs)
+        prof.dump_stats(datafn)
+        return retval
+
+    return wrapper
 
 
 class Quantiler(object):

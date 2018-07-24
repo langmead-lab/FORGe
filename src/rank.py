@@ -12,21 +12,9 @@ import sys
 from operator import itemgetter
 from util import PseudocontigIterator, vec_to_id, get_next_vector
 import re
-import cProfile
 
 
 VERSION = '0.0.3'
-
-
-def profileit(func):
-    def wrapper(*args, **kwargs):
-        datafn = func.__name__ + ".profile" # Name the data file sensibly
-        prof = cProfile.Profile()
-        retval = prof.runcall(func, *args, **kwargs)
-        prof.dump_stats(datafn)
-        return retval
-
-    return wrapper
 
 
 class VarRanker:
@@ -82,22 +70,14 @@ class VarRanker:
 
     def avg_read_prob(self):
         logging.info('  Calculating average read probabilities')
-
-        # Uncommenting these saves about 1/3rd of the time
-
-        #self.wgt_ref = 0.778096
-        #self.wgt_added = 0.002113
-
         if self.wgt_ref and self.wgt_added:
             return
 
         # Average probability (weighted by genome length) of a specific read from the linear genome being chosen 
-        total_prob_ref = 0
-        count_ref = 0
+        total_prob_ref, count_ref = 0, 0
 
         # Average probability (weighted by genome length) of a specific read from the added pseudocontigs being chosen 
-        total_prob_added = 0
-        count_added = 0
+        total_prob_added, count_added = 0, 0
 
         if self.hap_parser is not None:
             self.hap_parser.reset_chunk()
@@ -198,7 +178,6 @@ class VarRanker:
             tot_pc_len += len(chrom)
             logging.info('    %d contigs, %d bases' % (n_pcs, tot_pc_len))
 
-    @profileit
     def count_kmers_added(self):
         logging.info('  Counting augmented k-mers')
         self.h_added = self.counter_maker('Aug')
@@ -307,7 +286,6 @@ class VarRanker:
         self.count_kmers_added()
         self.avg_read_prob()
 
-    @profileit
     def rank_hybrid(self, threshold=0.5):
         """
         `threshold` for blowup avoidance
