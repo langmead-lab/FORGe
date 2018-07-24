@@ -8,13 +8,14 @@ import argparse
 from iohelp import HaplotypeParser, read_genome, parse_1ksnp
 import logging
 import kmer_counter
+import sys
 from operator import itemgetter
 from util import PseudocontigIterator, vec_to_id, get_next_vector
 import re
 import cProfile
 
 
-VERSION = '0.0.2'
+VERSION = '0.0.3'
 
 
 def profileit(func):
@@ -187,7 +188,6 @@ class VarRanker:
         logging.info('  Avg probability of reads in ref:  %f' % self.wgt_ref)
         logging.info('  Avg probability of added reads:   %f' % self.wgt_added)
 
-    @profileit
     def count_kmers_ref(self):
         logging.info('  Counting reference k-mers')
         self.h_ref = self.counter_maker('Ref')
@@ -197,12 +197,12 @@ class VarRanker:
             n_pcs += 1
             tot_pc_len += len(chrom)
             logging.info('    %d contigs, %d bases' % (n_pcs, tot_pc_len))
-        #self.h_ref.report_fpr()
 
+    @profileit
     def count_kmers_added(self):
         logging.info('  Counting augmented k-mers')
         self.h_added = self.counter_maker('Aug')
-        n_pcs, n_vars, tot_pc_len, max_vars = 0, 0, 0, 0
+        n_pcs, n_vars, max_vars = 0, 0, 0
         incr = 1.1
         bar = 1000
 
@@ -228,7 +228,6 @@ class VarRanker:
 
                 for pc in PseudocontigIterator(chrom_seq, vars, ids, self.r):
                     n_pcs += 1
-                    tot_pc_len += len(pc)
                     if n_pcs >= bar:
                         bar = max(bar+1, int(bar*incr))
                         logging.info('    %d contigs, %d vars; max vars=%d; %0.3f%% done' %
@@ -289,6 +288,7 @@ class VarRanker:
         elif method == 'popcov-blowup':
             ordered = self.rank_pop_cov(True)
         elif method == 'hybrid':
+            self.count_kmers()
             ordered, ordered_blowup = self.rank_hybrid()
         else:
             raise RuntimeError('Bad ordering method: "%s"' % method)
@@ -301,25 +301,29 @@ class VarRanker:
             with open(out_file + '.blowup', 'w') as f:
                 f.write('\t'.join([tup[0] + ',' + str(tup[1] + 1) for tup in ordered_blowup]))
 
-    def rank_hybrid(self, threshold=0.5):
-        """
-        `threshold` for blowup avoidance
-        """
-        logging.info('Hybrid-ranking variants')
+    def count_kmers(self):
         logging.info('  Counting k-mers')
         self.count_kmers_ref()
         self.count_kmers_added()
         self.avg_read_prob()
 
+    @profileit
+    def rank_hybrid(self, threshold=0.5):
+        """
+        `threshold` for blowup avoidance
+        """
+        logging.info('Hybrid-ranking variants')
         logging.info('  Computing hybrid scores')
         if self.hap_parser is not None:
             self.hap_parser.reset_chunk()
 
         var_wgts = []
         num_v = num_v_cum = 0
-        bar = 1000
+        bar = 100
         incr = 1.1
 
+        #hist_ref, hist_aug = Quantiler(), Quantiler()
+        hist_ref, hist_aug = None, None
         for chrom, variants in self.variants.items():
             num_v = len(variants)
             var_wgts_chrom = [0] * num_v
@@ -329,11 +333,14 @@ class VarRanker:
                     msofar = (num_v_cum + v)
                     pct = msofar * 100.0 / self.num_v
                     logging.info('    %d out of %d variants; %0.3f%% done' % (msofar, self.num_v, pct))
-                self.compute_hybrid(self.genome[chrom], variants, v, var_wgts_chrom)
+                self.compute_hybrid(self.genome[chrom], variants, v, var_wgts_chrom, hist_ref, hist_aug)
             for v in range(num_v):
                 var_wgts.append([var_wgts_chrom[v], chrom, variants.poss[v]])
             num_v_cum += num_v
             assert len(var_wgts) == num_v_cum
+
+        #logging.info('Ref quantiles: ' + str(hist_ref))
+        #logging.info('Aug quantiles: ' + str(hist_aug))
 
         assert num_v == self.num_v == len(var_wgts)
 
@@ -391,7 +398,7 @@ class VarRanker:
 
         return ordered, self.rank_dynamic_blowup(upper_tier, lower_tier)
 
-    def compute_hybrid(self, chrom_seq, variants, first_var, var_wgts):
+    def compute_hybrid(self, chrom_seq, variants, first_var, var_wgts, hist_ref, hist_aug):
         pos = variants.poss[first_var]
         num_v = len(variants)
         r = self.r
@@ -414,10 +421,15 @@ class VarRanker:
         it = PseudocontigIterator(chrom_seq, variants, ids, r)
         for pc in it:
             p = self.prob_read(variants, ids, it.vec)
-            c_refs = self.h_ref.query(pc)
-            c_augs = self.h_added.query(pc)
-            for i, count_pair in enumerate(zip(c_refs, c_augs)):
-                c_ref, c_aug = count_pair
+            c_refs, c_refslen = self.h_ref.query(pc)
+            c_augs, c_augslen = self.h_added.query(pc)
+            assert c_refslen == c_augslen
+            for i in range(c_refslen):
+                c_ref, c_aug = c_refs[i], c_augs[i]
+                if hist_ref is not None:
+                    hist_ref.add(c_ref)
+                if hist_aug is not None:
+                    hist_aug.add(c_aug)
                 if c_aug == 0:
                     print('Error! Read %s from added pseudocontigs could not be found (SNPs %d - %d)' % (pc[i:i+r], first_var, first_var+k))
                     for j in range(first_var, first_var+k):
@@ -577,8 +589,6 @@ def go(args):
 
 
 if __name__ == '__main__':
-
-    import sys
     format_str = '%(asctime)s:%(levelname)s:%(message)s'
     level = logging.INFO
     logging.basicConfig(format=format_str, datefmt='%m/%d/%y-%H:%M:%S', level=level)
