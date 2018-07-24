@@ -1,3 +1,4 @@
+#include <sys/stat.h>
 #include <stdint.h>
 #include <assert.h>
 #include <stdio.h>
@@ -359,6 +360,29 @@ static void quick_tests(unsigned seed) {
     }
 }
 
+
+int fexists(const char *fn) {
+  struct stat buffer;   
+  return stat(fn, &buffer) == 0;
+}
+
+
+char *fslurp(const char *fn) {
+    char *buffer = NULL;
+    long length;
+    FILE *f = fopen(fn, "rb");    
+    assert(f != NULL);
+    fseek(f, 0, SEEK_END);
+    length = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    buffer = malloc(length);
+    assert(buffer != NULL);
+    fread(buffer, 1, length, f);
+    fclose(f);
+    return buffer;
+}
+
+
 // Example args: 4 40 40 ACGTACG ACGT
 int main(int argc, char *argv[]) {
 
@@ -379,8 +403,17 @@ int main(int argc, char *argv[]) {
     CMS_Log8_init(&sketch, width, depth);
 
     const char *ref = argv[4];
-    fprintf(stderr, "Building reference from: %s\n", ref);
-    bounter_string_injest(&sketch, ksize, ref, strlen(ref));
+    int added = 0;
+    if(fexists(ref)) {
+        fprintf(stderr, "Building reference from file: \"%s\"\n", ref);
+        char *text = fslurp(ref);
+        added = bounter_string_injest(&sketch, ksize, text, strlen(text));
+        free(text);
+    } else {
+        fprintf(stderr, "Building reference from string: \"%s\"\n", ref);
+        added = bounter_string_injest(&sketch, ksize, ref, strlen(ref));
+    }
+    fprintf(stderr, "  added %d k-mers\n", added);
 
     for(int i = 5; i < argc; i++) {
         size_t len = strlen(argv[i]);
