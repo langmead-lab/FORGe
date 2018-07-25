@@ -2,7 +2,6 @@
 
 import sys
 import argparse
-import bisect
 
 # Update a genome with a set of SNPs and write to a new file
 
