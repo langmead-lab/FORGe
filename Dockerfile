@@ -2,10 +2,6 @@ FROM python:3.4-jessie
 
 RUN apt-get update
 
-# for bx-python
-RUN apt-get install -y liblzo2-2
-RUN apt-get install -y liblzo2-dev
-
 RUN apt-get install -y valgrind
 
 ADD src /code/src

@@ -6,16 +6,15 @@ Interfaces to various k-mer counters
 
 from __future__ import print_function
 import re
+import os
 import pytest
-from collections import Counter
 import logging
+import shutil
 import random
+import tempfile
 from util import revcomp
-from _api import ffi, lib
+from collections import Counter
 
-
-# at module level
-malloc = ffi.new_allocator(should_clear_after_alloc=False)
 
 _non_acgt = re.compile(b'[^ACGTacgt]')
 
@@ -47,121 +46,136 @@ class SimpleKmerCounter(object):
         self.counter.update(kmers)
         return len(kmers)
 
-    def query(self, s):
+    def query(self, query):
         """ Query with each k-mer substring """
+        for x in map(lambda kmer: -1 if kmer is None else self.counter.get(kmer, 0), slice_canonical(query, self.r)):
+            yield x
+
+    def query_batch(self, queries):
+        """ Query with each k-mer substring of each query string """
+        for query in queries:
+            for res in self.query(query):
+                yield res
+
+
+class KMC3KmerCounter(object):
+
+    def __init__(self,  name, r, batch_size=64 * 1024 * 1024):
+        self.name = name
+        self.r = r
+        self.tmp_dir = tempfile.mkdtemp()
+        self.tmp_fn = os.path.join(self.tmp_dir, 'batch.mfa')
+        self.working_dir = os.path.join(self.tmp_dir, 'working')
+        assert not os.path.exists(self.working_dir)
+        os.mkdir(self.working_dir)
+        self.tmp_db_fn = os.path.join(self.tmp_dir, 'batch.db')
+        self.tmp_comb_fn = os.path.join(self.tmp_dir, 'combined.db')
+        self.tmp_combtmp_fn = os.path.join(self.tmp_dir, 'combined_tmp.db')
+        self.tmp_fh = open(self.tmp_fn, 'wb')
+        self.query_fn = os.path.join(self.tmp_dir, 'query.mfa')
+        self.dump_fn = os.path.join(self.tmp_dir, 'dump.tsv')
+        self.qcounts_fn = os.path.join(self.tmp_dir, 'query_counts.db')
+        self.buffered_bytes = 0
+        self.batch_size = batch_size
+        self.first = True
+
+    def __del__(self):
+        self.tmp_fh.close()
+        for fn in [self.tmp_fn, self.query_fn, self.tmp_db_fn,
+                   self.tmp_comb_fn + '.kmc_pre',
+                   self.tmp_comb_fn + '.kmc_suf',
+                   self.tmp_combtmp_fn + '.kmc_pre',
+                   self.tmp_combtmp_fn + '.kmc_suf',
+                   self.qcounts_fn + '.kmc_pre',
+                   self.qcounts_fn + '.kmc_suf',
+                   self.dump_fn]:
+            if os.path.exists(fn):
+                os.remove(fn)
+        shutil.rmtree(self.working_dir)
+
+    def add(self, s):
         assert isinstance(s, bytes)
-        result = list(map(lambda kmer: -1 if kmer is None else self.counter.get(kmer, 0), slice_canonical(s, self.r)))
-        assert all(map(lambda x: x is not None, result)), (s, result)
-        return result, len(result)
+        assert not self.tmp_fh.closed
+        st = b'>r\n%s\n' % s
+        self.buffered_bytes += len(st)
+        self.tmp_fh.write(st)
+        if self.buffered_bytes > self.batch_size:
+            self.flush()
 
-
-class BounterKmerCounter(object):
-    def __init__(self,  name, r, size_mb=128, log_counting=8):
-        if log_counting not in [None, 8, 1024]:
-            raise ValueError('log_counting must be one of: None (for non-log), '
-                             '8 (for 3-bit exact), 1024 (for 10-bit exact)')
-        if log_counting != 8:
-            raise ValueError('Only 8-bit log counting supported for now')
-        if log_counting == 8:
-            self.cell_size = cell_size = 1
-        elif log_counting == 1024:
-            self.cell_size = cell_size = 2
+    def flush(self):
+        self.tmp_fh.close()
+        logging.info('Counting batch of ~%d bytes' % self.buffered_bytes)
+        cmd = 'kmc -k%d -ci1 -fm %s %s %s' % (self.r, self.tmp_fn, self.tmp_db_fn, self.working_dir)
+        logging.info(cmd)
+        ret = os.system(cmd)
+        if ret != 0:
+            raise RuntimeError('Command "%s" returned %d' % (cmd, ret))
+        if self.first:
+            self.first = False
+            os.system('mv %s.kmc_pre %s.kmc_pre' % (self.tmp_db_fn, self.tmp_comb_fn))
+            os.system('mv %s.kmc_suf %s.kmc_suf' % (self.tmp_db_fn, self.tmp_comb_fn))
         else:
-            self.cell_size = cell_size = 4
-        self.width = 1 << (size_mb * (2 ** 20) // (cell_size * 8 * 2)).bit_length()
-        self.depth = (size_mb * (2 ** 20)) // (self.width * cell_size)
-        self.name = name
-        self.r = r
-        self.result_len = 1024
-        self.results = malloc("int64_t[]", self.result_len)
-        self.sketch = lib.bounter_new(self.width, self.depth)
+            cmd = 'kmc_tools simple %s %s union %s' % \
+                (self.tmp_db_fn, self.tmp_comb_fn, self.tmp_combtmp_fn)
+            logging.info(cmd)
+            ret = os.system(cmd)
+            if ret != 0:
+                raise RuntimeError('Command "%s" returned %d' % (cmd, ret))
+            os.system('mv %s.kmc_pre %s.kmc_pre' % (self.tmp_combtmp_fn, self.tmp_comb_fn))
+            os.system('mv %s.kmc_suf %s.kmc_suf' % (self.tmp_combtmp_fn, self.tmp_comb_fn))
+            os.remove('%s.kmc_pre' % self.tmp_db_fn)
+            os.remove('%s.kmc_suf' % self.tmp_db_fn)
+        self.tmp_fh = open(self.tmp_fn, 'wb')
+        self.buffered_bytes = 0
 
-    def close(self):
-        lib.bounter_delete(self.sketch)
+    def query(self, query):
+        assert isinstance(query, bytes)
+        for x in self.query_batch([query]):
+            yield x
 
-    def add(self, s):
-        """ Add canonicalized version of each k-mer substring """
-        assert isinstance(s, bytes)
-        lib.bounter_string_injest(self.sketch, self.r, s, len(s))
-
-    def query(self, s):
-        """ Query with each k-mer substring """
-        assert isinstance(s, bytes)
-        result_len = len(s)-self.r+1
-        if result_len > self.result_len:
-            del self.results
-            self.result_len = result_len
-            self.results = malloc("int64_t[]", self.result_len)
-        lib.bounter_string_query(self.sketch, self.r, s, len(s), self.results, result_len)
-        return self.results, result_len
-
-
-class SqueakrKmerCounter(object):
-    """
-    What is the size of the CQF?
-    """
-    def __init__(self, name, r, qbits=10):
-        self.name = name
-        self.r = r
-        self.qbits = qbits
-        self.result_len = 1024
-        self.results = malloc("int64_t[]", self.result_len)
-        self.db = lib.cqf_new(r, qbits)
-
-    def close(self):
-        lib.cqf_delete(self.db)
-
-    def add(self, s):
-        """ Add canonicalized version of each k-mer substring """
-        assert isinstance(s, bytes)
-        lib.cqf_string_injest(s, len(s), self.db)
-
-    def query(self, s):
-        """ Query with each k-mer substring """
-        assert isinstance(s, bytes)
-        result_len = len(s)-self.r+1
-        if result_len > self.result_len:
-            del self.results
-            self.result_len = result_len
-            self.results = malloc("int64_t[]", self.result_len)
-        lib.cqf_string_query(s, len(s), self.results, result_len, self.db)
-        return self.results, result_len
-
-    def report_fpr(self):
-        results, results_len = lib.cqf_est_fpr(self.db)
-        for i in range(0, results_len, 2):
-            nobs, ntrue = results[i], results[i+1]
-            logging.info('%d %d %d' % (nobs-ntrue, nobs, ntrue))
-
-
-class JellyfishKmerCounter(object):
-    def __init__(self,  name, r, initial_size=1024, bits_per_value=5):
-        import jellyfish
-        self.name = name
-        self.r = r
-        jellyfish.MerDNA.k(r)
-        self.counter = jellyfish.HashCounter(initial_size, bits_per_value)
-
-    def add(self, s):
-        """ Add canonicalized version of each k-mer substring """
-        for mer in jellyfish.string_canonicals(s):
-            self.counter.add(mer, 1)
-
-    def query(self, s):
-        res = []
-        for mer in jellyfish.string_canonicals(s):
-            cnt = self.counter[mer]
-            assert cnt is not None
-            res.append(cnt)
-        return res
+    def query_batch(self, queries):
+        """ Query with a batch of long strings """
+        if self.buffered_bytes > 0:
+            self.flush()
+        assert self.buffered_bytes == 0
+        # Write queries to multi-fasta
+        with open(self.query_fn, 'wb') as fh:
+            for query in queries:
+                st = b'>r\n%s\n' % query
+                fh.write(st)
+        # Count k-mers (counting is redundant; we just want a set)
+        cmd = 'kmc -k%d -ci1 -fm %s %s %s' % (self.r, self.query_fn, self.tmp_db_fn, self.working_dir)
+        logging.info(cmd)
+        ret = os.system(cmd)
+        if ret != 0:
+            raise RuntimeError('Command "%s" returned %d' % (cmd, ret))
+        # Perform intersection with the big count file
+        cmd = 'kmc_tools simple %s %s intersect %s -ocleft' % (self.tmp_comb_fn, self.tmp_db_fn, self.qcounts_fn)
+        logging.info(cmd)
+        ret = os.system(cmd)
+        if ret != 0:
+            raise RuntimeError('Command "%s" returned %d' % (cmd, ret))
+        # Dump the intersection file
+        cmd = 'kmc_dump %s %s' % (self.qcounts_fn, self.dump_fn)
+        logging.info(cmd)
+        ret = os.system(cmd)
+        if ret != 0:
+            raise RuntimeError('Command "%s" returned %d' % (cmd, ret))
+        # Can remove query set now
+        os.remove('%s.kmc_pre' % self.tmp_db_fn)
+        os.remove('%s.kmc_suf' % self.tmp_db_fn)
+        # Read in dump
+        with open(self.dump_fn, 'rb') as fh:
+            h = {seq: int(cnt) for seq, cnt in map(lambda x: x.rstrip().split(), fh)}
+        os.remove(self.dump_fn)
+        for query in queries:
+            for x in map(lambda kmer: -1 if kmer is None else h.get(kmer, 0), slice_canonical(query, self.r)):
+                yield x
 
 
 def pytest_generate_tests(metafunc):
     if 'counter_class' in metafunc.fixturenames:
-        # Add classes to list as they are added
-        #counter_classes = [SimpleKmerCounter, BounterKmerCounter, SqueakrKmerCounter]
-        #counter_classes = [SimpleKmerCounter, BounterKmerCounter]
-        counter_classes = [SimpleKmerCounter, BounterKmerCounter]
+        counter_classes = [SimpleKmerCounter, KMC3KmerCounter]
         metafunc.parametrize("counter_class", counter_classes, indirect=True)
 
 
@@ -200,14 +214,14 @@ def test_slice_and_canonicalize():
 def test_counter_1(counter_class):
     cnt = counter_class('Test', 4)
     cnt.add(b'ACGT')
-    res, reslen = cnt.query(b'ACGT')
-    assert reslen == 1
-    assert res[0] == 1
+    res = list(cnt.query(b'ACGT'))
+    assert 1 == len(res)
+    assert 1 == res[0]
 
     cnt.add(b'ACNT')
-    res, reslen = cnt.query(b'ACGT')
-    assert reslen == 1
-    assert res[0] == 1  # cumulative
+    res = list(cnt.query(b'ACGT'))
+    assert 1 == len(res)
+    assert 1 == res[0]
 
 
 def test_counter_2(counter_class):
@@ -215,10 +229,10 @@ def test_counter_2(counter_class):
     cnt.add(b'ACGTACGTNACGTACGT')
     #         ACGTACGT
     #                  ACGTACGT
-    res, reslen = cnt.query(b'ACGTACGTN')
-    assert reslen == 2
-    assert res[1] == -1
-    assert res[0] == 2
+    res = list(cnt.query(b'ACGTACGTN'))
+    assert 2 == len(res)
+    assert -1 == res[1]
+    assert 2 == res[0]
 
 
 def test_counter_3(counter_class):
@@ -229,27 +243,44 @@ def test_counter_3(counter_class):
     #          2222  x  7777    GTAC x 2
     #           3333 x   8888   TACG -> CGTA x 2
     #            4444x    9999  ACGT x 2
-    res, reslen = cnt.query(b'ACGTACG')
+    res = list(cnt.query(b'ACGTACG'))
     #                0000
     #                 1111
     #                  2222
     #                   3333
-    assert reslen == 4
+    assert 4 == len(res)
     assert res[0] == 4  # ACGT
     assert res[1] == 4  # CGTA
     assert res[2] == 2  # GTAC
     assert res[3] == 4  # TACG -> CGTA
 
 
-def _test_random(cnt, k=4, len=1000):
-    stlen = 10000
+def test_counter_4(counter_class):
+    cnt = counter_class('Test', 4)
+    cnt.add(b'ACGT')
+    cnt.add(b'ACGT')
+    cnt.add(b'ACGT')
+    cnt.add(b'CCGT')
+    cnt.add(b'CCGT')
+    cnt.add(b'TTTT')
+    cnt.add(b'AAAA')
+    res = list(cnt.query_batch([b'ACGT', b'CCGT', b'AAAAA']))
+    #                             3        2        22
+    assert 4 == len(res)
+    assert 3 == res[0]
+    assert 2 == res[1]
+    assert 2 == res[2]
+    assert 2 == res[3]
+
+
+def _test_random(cnt, k=4, stlen = 10000):
     random.seed(21361)
     st1 = b''.join([random.choice([b'A', b'C', b'G', b'T']) for _ in range(stlen)])
     st2 = b''.join([random.choice([b'A', b'C', b'G', b'T']) for _ in range(stlen)])
     results_len = stlen - k + 1
     cnt.add(st1)
-    results, results_len2 = cnt.query(st2)
-    assert results_len == results_len2
+    results = list(cnt.query(st2))
+    assert results_len == len(results)
     for i in range(results_len-k+1):
         km_orig = st2[i:i+k]
         km = min(km_orig, revcomp(km_orig))
@@ -259,8 +290,8 @@ def _test_random(cnt, k=4, len=1000):
 
 
 def test_random_k4_10000(counter_class, k=4):
-    _test_random(counter_class('Test', k), k, 10000)
+    _test_random(counter_class('Test', k), k)
 
 
 def test_random_k100_100000(counter_class, k=100):
-    _test_random(counter_class('Test', k), k, 100000)
+    _test_random(counter_class('Test', k), k)
