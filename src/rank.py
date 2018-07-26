@@ -20,7 +20,7 @@ VERSION = '0.0.3'
 
 class VarRanker:
 
-    def __init__(self, genome, variants, r, phasing, max_v, counter_type):
+    def __init__(self, genome, variants, r, phasing, max_v, counter_type, temp):
         logging.info('Creating ranker')
         self.genome = genome
         self.chrom_lens = dict()
@@ -37,10 +37,13 @@ class VarRanker:
         self.curr_vars = None
         self.freqs = {}
         self.counter_type = counter_type
+        self.temp = temp
 
     def counter_maker(self, name, dont_care_below=1):
         if self.counter_type == 'Simple':
-            return kmer_counter.SimpleKmerCounter(name, self.r, dont_care_below=dont_care_below)
+            return kmer_counter.SimpleKmerCounter(name, self.r,
+                                                  dont_care_below=dont_care_below,
+                                                  temp=self.temp)
         elif self.counter_type.startswith('KMC3'):
             toks = self.counter_type.split(',')
             threads, gb, batch_sz = 1, 4, 64 * 1024 * 1024 * 1024
@@ -50,8 +53,11 @@ class VarRanker:
                 gb = int(toks[2])
             if len(toks) > 3:
                 batch_sz = int(toks[3])
-            return kmer_counter.KMC3KmerCounter(name, self.r, threads=threads, gb=gb,
-                                                batch_size=batch_sz, dont_care_below=dont_care_below)
+            return kmer_counter.KMC3KmerCounter(name, self.r,
+                                                threads=threads, gb=gb,
+                                                batch_size=batch_sz,
+                                                dont_care_below=dont_care_below,
+                                                temp=self.temp)
 
     def avg_read_prob(self):
         logging.info('  Calculating average read probabilities')
@@ -608,7 +614,7 @@ def go(args):
     logging.info('Parsing 1ksnp')
     vars = parse_1ksnp(args.vars, G=genome, target_chrom=args.chrom)
 
-    ranker = VarRanker(genome, vars, r, args.phasing, max_v, counter_type)
+    ranker = VarRanker(genome, vars, r, args.phasing, max_v, counter_type, args.temp)
     if args.pseudocontigs:
         raise RuntimeError('--pseudocontigs not supported')
         #ranker.seen_pcs(o)
@@ -630,24 +636,34 @@ if __name__ == '__main__':
             formatter_class=argparse.RawDescriptionHelpFormatter)
 
     parser.add_argument('--method', type=str, required=True,
-        help='Variant ranking method. Currently supported ranking methods: [popcov | popcov-blowup | hybrid]\n\'hybrid\' will produce hybrid ranking files both with and without blowup avoidance,')
+        help='Variant ranking method. Currently supported ranking methods: '
+             '[popcov | popcov-blowup | hybrid]\n\'hybrid\' will produce '
+             'hybrid ranking files both with and without blowup avoidance,')
     parser.add_argument('--reference', type=str, required=True, 
         help='Path to fasta file containing reference genome')
+    parser.add_argument('--temp', type=str, required=False, 
+        help='Set base temporary directory')
     parser.add_argument("--vars", type=str, required=True,
         help="Path to 1ksnp file containing variant information")
     parser.add_argument('--chrom', type=str,
-        help="Name of chromosome from reference genome to process. If not present, process all chromosomes.")
+        help='Name of chromosome from reference genome to process. If not '
+             'present, process all chromosomes.')
     parser.add_argument('--window-size', type=int,
-        help="Radius of window (i.e. max read length) to use. Larger values will take longer. Default: 35")
-    parser.add_argument('--pseudocontigs', action="store_true", help=argparse.SUPPRESS) # help='Rank pseudocontigs rather than SNPs')
+        help='Radius of window (i.e. max read length) to use. Larger values '
+             'will take longer. Default: 35')
+    parser.add_argument('--pseudocontigs', action="store_true",
+        help=argparse.SUPPRESS) # help='Rank pseudocontigs rather than SNPs')
     parser.add_argument('--phasing', type=str, required=False,
         help="Path to file containing phasing information for each individual")
     parser.add_argument('--output', type=str, required=False,
         help="Path to file to write output ranking to. Default: 'ordered.txt'")
     parser.add_argument('--counter', type=str, required=False, default='KMC3',
-        help="Type of counter to use; options are: \"Simple\"; \"KMC3,<threads>,<gb>,<batch_size>\"")
+        help='Type of counter to use; options are: "Simple"; '
+             '"KMC3,<threads>,<gb>,<batch_size>"')
     parser.add_argument('--prune', type=int, required=False,
-        help='In each window, prune haplotypes by only processing up to this many variants. We recommend including this argument when ranking with the hybrid strategy for window sizes over 35.')
+        help='In each window, prune haplotypes by only processing up to '
+             'this many variants. We recommend including this argument when '
+             'ranking with the hybrid strategy for window sizes over 35.')
 
     args = parser.parse_args(sys.argv[1:])
     go(args)

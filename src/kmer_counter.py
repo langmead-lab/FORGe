@@ -34,7 +34,7 @@ class SimpleKmerCounter(object):
     Use collections.Counter and do exact counting
     """
 
-    def __init__(self, name, r, dont_care_below=1):
+    def __init__(self, name, r, dont_care_below=1, temp=None):
         self.name = name
         self.r = r
         self.counter = Counter()
@@ -64,10 +64,12 @@ class SimpleKmerCounter(object):
 
 class KMC3KmerCounter(object):
 
-    def __init__(self,  name, r, threads=1, gb=4, batch_size=64 * 1024 * 1024 * 1024, dont_care_below=1):
+    def __init__(self,  name, r, threads=1, gb=4,
+                 batch_size=64 * 1024 * 1024 * 1024, dont_care_below=1,
+                 temp=None):
         self.name = name
         self.r = r
-        self.tmp_dir = tempfile.mkdtemp()
+        self.tmp_dir = tempfile.mkdtemp(dir=temp)
         self.batch_mfa = os.path.join(self.tmp_dir, 'batch.mfa')
         self.working_dir = os.path.join(self.tmp_dir, 'working')
         assert not os.path.exists(self.working_dir)
