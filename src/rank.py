@@ -43,10 +43,15 @@ class VarRanker:
             return kmer_counter.SimpleKmerCounter(name, self.r, dont_care_below=dont_care_below)
         elif self.counter_type.startswith('KMC3'):
             toks = self.counter_type.split(',')
-            batch_sz = 64 * 1024 * 1024 * 1024
+            threads, gb, batch_sz = 1, 4, 64 * 1024 * 1024 * 1024
             if len(toks) > 1:
-                batch_sz = int(toks[1])
-            return kmer_counter.KMC3KmerCounter(name, self.r, batch_size=batch_sz, dont_care_below=dont_care_below)
+                threads = int(toks[1])
+            if len(toks) > 2:
+                gb = int(toks[2])
+            if len(toks) > 3:
+                batch_sz = int(toks[3])
+            return kmer_counter.KMC3KmerCounter(name, self.r, threads=threads, gb=gb,
+                                                batch_size=batch_sz, dont_care_below=dont_care_below)
 
     def avg_read_prob(self):
         logging.info('  Calculating average read probabilities')
@@ -640,7 +645,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=str, required=False,
         help="Path to file to write output ranking to. Default: 'ordered.txt'")
     parser.add_argument('--counter', type=str, required=False, default='KMC3',
-        help="Type of counter to use; options are: \"Simple\"; \"KMC3,<batch_size>\"")
+        help="Type of counter to use; options are: \"Simple\"; \"KMC3,<threads>,<gb>,<batch_size>\"")
     parser.add_argument('--prune', type=int, required=False,
         help='In each window, prune haplotypes by only processing up to this many variants. We recommend including this argument when ranking with the hybrid strategy for window sizes over 35.')
 
