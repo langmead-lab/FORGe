@@ -64,9 +64,8 @@ class SimpleKmerCounter(object):
 
 class KMC3KmerCounter(object):
 
-    def __init__(self,  name, r, threads=1, gb=4,
-                 batch_size=64 * 1024 * 1024 * 1024, dont_care_below=1,
-                 temp=None):
+    def __init__(self,  name, r, threads=1, gb=4, batch_size=-1,
+                 dont_care_below=1, temp=None):
         self.name = name
         self.r = r
         self.tmp_dir = tempfile.mkdtemp(dir=temp)
@@ -130,7 +129,8 @@ class KMC3KmerCounter(object):
         self.buffered_bytes += len(st)
         assert self.buffered_bytes > 0
         self.tmp_fh.write(st)
-        if self.buffered_bytes > self.batch_size:
+        # negative batch size means no limit
+        if self.buffered_bytes > self.batch_size >= 0:
             self.flush()
             assert self.buffered_bytes == 0
 

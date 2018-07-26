@@ -46,7 +46,7 @@ class VarRanker:
                                                   temp=self.temp)
         elif self.counter_type.startswith('KMC3'):
             toks = self.counter_type.split(',')
-            threads, gb, batch_sz = 1, 4, 64 * 1024 * 1024 * 1024
+            threads, gb, batch_sz = 1, 4, -1
             if len(toks) > 1:
                 threads = int(toks[1])
             if len(toks) > 2:
@@ -253,7 +253,7 @@ class VarRanker:
                 p *= (1 - variants.sum_probs(vi))
             return p
 
-    def rank(self, method, out_file):
+    def rank(self, method, out_file, query_batch_size=1000000):
         ordered_blowup = None
         if method == 'popcov':
             ordered = self.rank_pop_cov()
@@ -261,7 +261,7 @@ class VarRanker:
             ordered = self.rank_pop_cov(True)
         elif method == 'hybrid':
             self.count_kmers()
-            ordered, ordered_blowup = self.rank_hybrid()
+            ordered, ordered_blowup = self.rank_hybrid(query_batch_size=query_batch_size)
         else:
             raise RuntimeError('Bad ordering method: "%s"' % method)
 
@@ -279,7 +279,7 @@ class VarRanker:
         self.count_kmers_added()
         self.avg_read_prob()
 
-    def rank_hybrid(self, threshold=0.5):
+    def rank_hybrid(self, threshold=0.5, query_batch_size=1000000):
         """
         `threshold` for blowup avoidance
         """
@@ -341,13 +341,12 @@ class VarRanker:
                     ids = list(sorted(ids))
                 else:
                     ids = list(range(v, v + k))
-                queries_per_batch = 1000000
                 it = PseudocontigIterator(self.genome[chrom], variants, ids, r)
                 for pc in it:
                     batch.append(pc)
                     vecs.append(it.vec[:])
                     idss.append(ids)
-                    if len(batch) >= queries_per_batch:
+                    if len(batch) >= query_batch_size:
                         process_batch(batch, vecs, idss, variants, var_wgts_chrom)
                         batch, vecs, idss = [], [], []
             if len(batch) > 0:
@@ -362,11 +361,15 @@ class VarRanker:
 
         assert num_v == self.num_v == len(var_wgts)
 
-        # Uncomment the following 2 lines to write SNP hybrid scores to an intermediate file
+        # Uncomment the following 2 lines to write SNP hybrid scores to an
+        # intermediate file
+
         #with open('hybrid_wgts.txt', 'w') as f_hybrid:
         #    f_hybrid.write(','.join([str(w) for w in var_wgts]))
 
-        # Uncomment the following 2 lines and comment out all of the function above this line to resume computation from an intermediate hybrid scores file
+        # Uncomment the following 2 lines and comment out all of the function
+        # above this line to resume computation from an intermediate hybrid scores file
+
         #with open('hybrid_wgts.txt', 'r') as f_hybrid:
         #    var_wgts = [float(w) for w in f_hybrid.readline().rstrip().split(',')]
 
@@ -588,7 +591,8 @@ class VarRanker:
                 break
             max_val = max(lower_tier)[0]
             if max_val > threshold:
-                raise RuntimeError('Missed a point above threshold! max_val was %f and threshold was %f' % (max_val, threshold))
+                raise RuntimeError('Missed a point above threshold! max_val was '
+                                   '%f and threshold was %f' % (max_val, threshold))
             while max_val <= threshold:
                 threshold *= penalty
             upper_tier, new_lower = [], []
@@ -606,7 +610,7 @@ def go(args):
     r = args.window_size or 35
     o = args.output or 'ordered.txt'
     max_v = args.prune or r
-    counter_type = args.counter or ('KMC3,%d' % (64 * 1024 * 1024 * 1024))
+    counter_type = args.counter or 'KMC3'
 
     logging.info('Reading genome')
     genome = read_genome(args.reference, target_chrom=args.chrom)
@@ -619,7 +623,7 @@ def go(args):
         raise RuntimeError('--pseudocontigs not supported')
         #ranker.seen_pcs(o)
     else:
-        ranker.rank(args.method, o)
+        ranker.rank(args.method, o, query_batch_size=args.query_batch)
 
 
 if __name__ == '__main__':
@@ -651,6 +655,8 @@ if __name__ == '__main__':
     parser.add_argument('--window-size', type=int,
         help='Radius of window (i.e. max read length) to use. Larger values '
              'will take longer. Default: 35')
+    parser.add_argument('--query-batch', type=int, default=1000000,
+        help='Number of queries to batch when querying k-mer counts')
     parser.add_argument('--pseudocontigs', action="store_true",
         help=argparse.SUPPRESS) # help='Rank pseudocontigs rather than SNPs')
     parser.add_argument('--phasing', type=str, required=False,
