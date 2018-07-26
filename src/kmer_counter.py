@@ -144,6 +144,7 @@ class KMC3KmerCounter(object):
             os.system('mv %s.kmc_pre %s.kmc_pre' % (self.batch_db, self.combined_db))
             os.system('mv %s.kmc_suf %s.kmc_suf' % (self.batch_db, self.combined_db))
         else:
+            assert self.batch_size >= 0
             self.run('kmc_tools -t%d, simple %s %s union %s' %
                      (self.threads, self.batch_db, self.combined_db, self.combined_tmp_db))
             os.system('mv %s.kmc_pre %s.kmc_pre' % (self.combined_tmp_db, self.combined_db))
