@@ -122,6 +122,8 @@ class KMC3KmerCounter(object):
         shutil.rmtree(self.working_dir)
 
     def add(self, s):
+        if not self.first_query:
+            raise RuntimeError('Cannot add after first query')
         assert isinstance(s, bytes)
         assert not self.tmp_fh.closed
         st = b'>r\n%s\n' % s
@@ -245,6 +247,8 @@ def test_counter_1(counter_class):
     assert 1 == len(res)
     assert 1 == res[0]
 
+    cnt = counter_class('Test', 4)
+    cnt.add(b'ACGT')
     cnt.add(b'ACNT')
     res = list(cnt.query(b'ACGT'))
     assert 1 == len(res)
