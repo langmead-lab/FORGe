@@ -43,7 +43,7 @@ class VarRanker:
             return kmer_counter.SimpleKmerCounter(name, self.r, dont_care_below=dont_care_below)
         elif self.counter_type.startswith('KMC3'):
             toks = self.counter_type.split(',')
-            batch_sz = 512 * 1024 * 1024
+            batch_sz = 64 * 1024 * 1024 * 1024
             if len(toks) > 1:
                 batch_sz = int(toks[1])
             return kmer_counter.KMC3KmerCounter(name, self.r, batch_size=batch_sz, dont_care_below=dont_care_below)
@@ -595,7 +595,7 @@ def go(args):
     r = args.window_size or 35
     o = args.output or 'ordered.txt'
     max_v = args.prune or r
-    counter_type = args.counter or ('KMC3,%d' % (512*1024*1024))
+    counter_type = args.counter or ('KMC3,%d' % (64 * 1024 * 1024 * 1024))
 
     logging.info('Reading genome')
     genome = read_genome(args.reference, target_chrom=args.chrom)

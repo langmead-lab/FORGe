@@ -64,7 +64,7 @@ class SimpleKmerCounter(object):
 
 class KMC3KmerCounter(object):
 
-    def __init__(self,  name, r, batch_size=512 * 1024 * 1024, dont_care_below=1):
+    def __init__(self,  name, r, batch_size=64 * 1024 * 1024 * 1024, dont_care_below=1):
         self.name = name
         self.r = r
         self.tmp_dir = tempfile.mkdtemp()
