@@ -4,6 +4,7 @@
 Rank a set of variants for inclusion in a graph genome, from highest to lowest priority
 """
 
+from __future__ import print_function
 import argparse
 from iohelp import HaplotypeParser, read_genome, parse_1ksnp
 import logging
@@ -37,36 +38,15 @@ class VarRanker:
         self.freqs = {}
         self.counter_type = counter_type
 
-    def counter_maker(self, name):
+    def counter_maker(self, name, dont_care_below=1):
         if self.counter_type == 'Simple':
-            return kmer_counter.SimpleKmerCounter(name, self.r)
-        elif self.counter_type.startswith('Jellyfish'):
+            return kmer_counter.SimpleKmerCounter(name, self.r, dont_care_below=dont_care_below)
+        elif self.counter_type.startswith('KMC3'):
             toks = self.counter_type.split(',')
-            initial_size, bits_per_value = 1024, 5
+            batch_sz = 512 * 1024 * 1024
             if len(toks) > 1:
-                initial_size = int(toks[1])
-            if len(toks) > 2:
-                bits_per_value = int(toks[2])
-            return kmer_counter.JellyfishKmerCounter(name, self.r,
-                                                     initial_size=initial_size,
-                                                     bits_per_value=bits_per_value)
-        elif self.counter_type.startswith('Bounter'):
-            toks = self.counter_type.split(',')
-            size_mb, log_counting = 1024, 8
-            if len(toks) > 1:
-                size_mb = int(toks[1])
-            if len(toks) > 2:
-                log_counting = int(toks[2])
-            return kmer_counter.BounterKmerCounter(name, self.r,
-                                                   size_mb=size_mb,
-                                                   log_counting=log_counting)
-        else:
-            assert self.counter_type.startswith('Squeakr')
-            toks = self.counter_type.split(',')
-            qbits = 10
-            if len(toks) > 1:
-                qbits = int(toks[1])
-            return kmer_counter.SqueakrKmerCounter(name, self.r, qbits=qbits)
+                batch_sz = int(toks[1])
+            return kmer_counter.KMC3KmerCounter(name, self.r, batch_size=batch_sz, dont_care_below=dont_care_below)
 
     def avg_read_prob(self):
         logging.info('  Calculating average read probabilities')
@@ -170,17 +150,18 @@ class VarRanker:
 
     def count_kmers_ref(self):
         logging.info('  Counting reference k-mers')
-        self.h_ref = self.counter_maker('Ref')
+        self.h_ref = self.counter_maker('Ref', dont_care_below=1)
         n_pcs, tot_pc_len = 0, 0
         for chrom in self.genome.values():
             self.h_ref.add(chrom)
             n_pcs += 1
             tot_pc_len += len(chrom)
             logging.info('    %d contigs, %d bases' % (n_pcs, tot_pc_len))
+        self.h_ref.flush()
 
     def count_kmers_added(self):
         logging.info('  Counting augmented k-mers')
-        self.h_added = self.counter_maker('Aug')
+        self.h_added = self.counter_maker('Aug', dont_care_below=2)
         n_pcs, n_vars, max_vars = 0, 0, 0
         incr = 1.1
         bar = 1000
@@ -212,6 +193,7 @@ class VarRanker:
                         logging.info('    %d contigs, %d vars; max vars=%d; %0.3f%% done' %
                                      (n_pcs, n_vars, max_vars, 100.0*float(n_vars)/self.num_v))
                     self.h_added.add(pc)
+        self.h_added.flush()
 
     def prob_read(self, variants, var_ids, vec):
         """
@@ -300,18 +282,65 @@ class VarRanker:
         bar = 100
         incr = 1.1
 
+        def process_batch(batch, vecs, idss, variants, var_wgts_chrom):
+            assert len(batch) == len(vecs)
+            query_ref = self.h_ref.query_batch(batch)
+            query_aug = self.h_added.query_batch(batch)
+            for c_ref, c_aug, pc, vec, ids in zip(query_ref, query_aug, batch, vecs, idss):
+                if c_ref == -1:
+                    assert c_aug == -1
+                    continue
+                assert c_ref >= 0
+                if c_aug == 0:
+                    c_aug = 1
+                p = self.prob_read(variants, ids, vec)
+                if hist_ref is not None:
+                    hist_ref.add(c_ref)
+                if hist_aug is not None:
+                    hist_aug.add(c_aug)
+                c_total = c_ref + c_aug
+
+                # Average relative probability of this read's other mappings
+                avg_wgt = c_ref * self.wgt_ref + (c_aug - 1) * self.wgt_added
+                hybrid_wgt = (p - avg_wgt) / (c_total)
+                for j in range(len(ids)):
+                    if vec[j]:
+                        var_wgts_chrom[ids[j]] -= hybrid_wgt
+
         #hist_ref, hist_aug = Quantiler(), Quantiler()
         hist_ref, hist_aug = None, None
         for chrom, variants in self.variants.items():
             num_v = len(variants)
             var_wgts_chrom = [0] * num_v
+            batch, vecs, idss = [], [], []
             for v in range(num_v):
                 if num_v_cum + v >= bar:
                     bar = max(bar + 1, bar*incr)
                     msofar = (num_v_cum + v)
                     pct = msofar * 100.0 / self.num_v
                     logging.info('    %d out of %d variants; %0.3f%% done' % (msofar, self.num_v, pct))
-                self.compute_hybrid(self.genome[chrom], variants, v, var_wgts_chrom, hist_ref, hist_aug)
+                pos = variants.poss[v]
+                r = self.r
+                k = 1
+                while v + k < num_v and variants.poss[v + k] < pos + r:
+                    k += 1
+                if k > self.max_v_in_window:
+                    alt_freqs = [(variants.sum_probs(v + j), v + j) for j in range(1, k)]
+                    ids = [v] + [f[1] for f in sorted(alt_freqs, reverse=True)[:self.max_v_in_window - 1]]
+                    ids = list(sorted(ids))
+                else:
+                    ids = list(range(v, v + k))
+                queries_per_batch = 1000000
+                it = PseudocontigIterator(self.genome[chrom], variants, ids, r)
+                for pc in it:
+                    batch.append(pc)
+                    vecs.append(it.vec[:])
+                    idss.append(ids)
+                    if len(batch) >= queries_per_batch:
+                        process_batch(batch, vecs, idss, variants, var_wgts_chrom)
+                        batch, vecs, idss = [], [], []
+            if len(batch) > 0:
+                process_batch(batch, vecs, idss, variants, var_wgts_chrom)
             for v in range(num_v):
                 var_wgts.append([var_wgts_chrom[v], chrom, variants.poss[v]])
             num_v_cum += num_v
@@ -396,22 +425,37 @@ class VarRanker:
         else:
             ids = list(range(first_var, first_var+k))
 
+        queries_per_batch = 10000
+        batch, vecs = [], []
         it = PseudocontigIterator(chrom_seq, variants, ids, r)
-        for pc in it:
-            p = self.prob_read(variants, ids, it.vec)
-            c_refs, c_refslen = self.h_ref.query(pc)
-            c_augs, c_augslen = self.h_added.query(pc)
-            assert c_refslen == c_augslen
-            for i in range(c_refslen):
-                c_ref, c_aug = c_refs[i], c_augs[i]
+        while True:
+            for pc in it:
+                batch.append(pc)
+                vecs.append(it.vec)
+                if len(batch) >= queries_per_batch:
+                    break
+            if len(batch) == 0:
+                break
+            assert len(batch) == len(vecs)
+            query_ref = self.h_ref.query_batch(batch)
+            query_aug = self.h_added.query_batch(batch)
+            for c_ref, c_aug, pc, vec in zip(query_ref, query_aug, batch, vecs):
+                if c_ref == -1:
+                    assert c_aug == -1
+                    continue
+                assert c_ref >= 0
+                assert c_aug >= 0
+                p = self.prob_read(variants, ids, vec)
                 if hist_ref is not None:
                     hist_ref.add(c_ref)
                 if hist_aug is not None:
                     hist_aug.add(c_aug)
                 if c_aug == 0:
-                    print('Error! Read %s from added pseudocontigs could not be found (SNPs %d - %d)' % (pc[i:i+r], first_var, first_var+k))
+                    print('Error! Read %s from added pseudocontigs could not be found (SNPs %d - %d)' %
+                          (pc, first_var, first_var+k))
                     for j in range(first_var, first_var+k):
-                        print('%s: %d, %s --> %s' % (self.variants[j].chrom, self.variants[j].pos, self.variants[j].orig, ','.join(self.variants[j].alts)))
+                        print('%s: %d, %s --> %s' % (self.variants[j].chrom, self.variants[j].pos,
+                                                     self.variants[j].orig, ','.join(self.variants[j].alts)))
                     exit()
                 c_total = c_ref + c_aug
 
@@ -419,8 +463,9 @@ class VarRanker:
                 avg_wgt = c_ref * self.wgt_ref + (c_aug-1) * self.wgt_added
                 hybrid_wgt = (p - avg_wgt) / (c_total)
                 for j in range(len(ids)):
-                    if it.vec[j]:
+                    if vec[j]:
                         var_wgts[ids[j]] -= hybrid_wgt
+            batch, vecs = [], []
 
     def rank_pop_cov(self, with_blowup=False, threshold=0.5):
         if with_blowup:
@@ -550,7 +595,7 @@ def go(args):
     r = args.window_size or 35
     o = args.output or 'ordered.txt'
     max_v = args.prune or r
-    counter_type = args.counter or 'Bounter,1024,8'
+    counter_type = args.counter or ('KMC3,%d' % (512*1024*1024))
 
     logging.info('Reading genome')
     genome = read_genome(args.reference, target_chrom=args.chrom)
@@ -594,8 +639,8 @@ if __name__ == '__main__':
         help="Path to file containing phasing information for each individual")
     parser.add_argument('--output', type=str, required=False,
         help="Path to file to write output ranking to. Default: 'ordered.txt'")
-    parser.add_argument('--counter', type=str, required=False,
-        help="Type of counter to use; options are: \"Simple\"; \"Bounter,<size_mb>,<log_counting>\"; \"Sqeakr,<qbits>\"; \"Jellyfish,<initial_size>,<bits_per_value>\"")
+    parser.add_argument('--counter', type=str, required=False, default='KMC3',
+        help="Type of counter to use; options are: \"Simple\"; \"KMC3,<batch_size>\"")
     parser.add_argument('--prune', type=int, required=False,
         help='In each window, prune haplotypes by only processing up to this many variants. We recommend including this argument when ranking with the hybrid strategy for window sizes over 35.')
 

@@ -34,10 +34,11 @@ class SimpleKmerCounter(object):
     Use collections.Counter and do exact counting
     """
 
-    def __init__(self, name, r):
+    def __init__(self, name, r, dont_care_below=1):
         self.name = name
         self.r = r
         self.counter = Counter()
+        self.dont_care_below = dont_care_below
 
     def add(self, s):
         """ Add canonicalized version of each k-mer substring """
@@ -45,6 +46,9 @@ class SimpleKmerCounter(object):
         kmers = list(filter(lambda x: x is not None, slice_canonical(s, self.r)))
         self.counter.update(kmers)
         return len(kmers)
+
+    def flush(self):
+        pass  # nop
 
     def query(self, query):
         """ Query with each k-mer substring """
@@ -60,35 +64,53 @@ class SimpleKmerCounter(object):
 
 class KMC3KmerCounter(object):
 
-    def __init__(self,  name, r, batch_size=64 * 1024 * 1024):
+    def __init__(self,  name, r, batch_size=512 * 1024 * 1024, dont_care_below=1):
         self.name = name
         self.r = r
         self.tmp_dir = tempfile.mkdtemp()
-        self.tmp_fn = os.path.join(self.tmp_dir, 'batch.mfa')
+        self.batch_mfa = os.path.join(self.tmp_dir, 'batch.mfa')
         self.working_dir = os.path.join(self.tmp_dir, 'working')
         assert not os.path.exists(self.working_dir)
         os.mkdir(self.working_dir)
-        self.tmp_db_fn = os.path.join(self.tmp_dir, 'batch.db')
-        self.tmp_comb_fn = os.path.join(self.tmp_dir, 'combined.db')
-        self.tmp_combtmp_fn = os.path.join(self.tmp_dir, 'combined_tmp.db')
-        self.tmp_fh = open(self.tmp_fn, 'wb')
-        self.query_fn = os.path.join(self.tmp_dir, 'query.mfa')
+        self.batch_db = os.path.join(self.tmp_dir, 'batch.db')
+        self.combined_db = os.path.join(self.tmp_dir, 'combined.db')
+        self.combined_tmp_db = os.path.join(self.tmp_dir, 'combined_tmp.db')
+        self.tmp_fh = open(self.batch_mfa, 'wb')
+        self.query_mfa = os.path.join(self.tmp_dir, 'query.mfa')
         self.dump_fn = os.path.join(self.tmp_dir, 'dump.tsv')
-        self.qcounts_fn = os.path.join(self.tmp_dir, 'query_counts.db')
+        self.query_counts_db = os.path.join(self.tmp_dir, 'query_counts.db')
         self.buffered_bytes = 0
         self.batch_size = batch_size
-        self.first = True
+        self.dont_care_below = dont_care_below
+        self.first_flush = self.first_query = True
+        self.stdout_log = os.path.join(self.tmp_dir, 'stdout.log')
+        self.stderr_log = os.path.join(self.tmp_dir, 'stderr.log')
+
+    def run(self, cmd):
+        logging.info(cmd)
+        ret = os.system(cmd + ' >%s 2>%s' % (self.stdout_log, self.stderr_log))
+        if ret != 0:
+            msg = 'Error running command "%s"\n' + \
+                 ('Exitlevel: %d\n' % ret) + \
+                  'Output:\n' + \
+                  open(self.stdout_log, 'r').read() + '\n' + \
+                  'Error:\n' + \
+                  open(self.stderr_log, 'r').read() + '\n'
+            raise RuntimeError(msg)
+        return ret
 
     def __del__(self):
         self.tmp_fh.close()
-        for fn in [self.tmp_fn, self.query_fn, self.tmp_db_fn,
-                   self.tmp_comb_fn + '.kmc_pre',
-                   self.tmp_comb_fn + '.kmc_suf',
-                   self.tmp_combtmp_fn + '.kmc_pre',
-                   self.tmp_combtmp_fn + '.kmc_suf',
-                   self.qcounts_fn + '.kmc_pre',
-                   self.qcounts_fn + '.kmc_suf',
-                   self.dump_fn]:
+        for fn in [self.batch_mfa, self.query_mfa, self.batch_db,
+                   self.combined_db + '.kmc_pre',
+                   self.combined_db + '.kmc_suf',
+                   self.combined_tmp_db + '.kmc_pre',
+                   self.combined_tmp_db + '.kmc_suf',
+                   self.query_counts_db + '.kmc_pre',
+                   self.query_counts_db + '.kmc_suf',
+                   self.dump_fn,
+                   self.stdout_log,
+                   self.stderr_log]:
             if os.path.exists(fn):
                 os.remove(fn)
         shutil.rmtree(self.working_dir)
@@ -98,34 +120,29 @@ class KMC3KmerCounter(object):
         assert not self.tmp_fh.closed
         st = b'>r\n%s\n' % s
         self.buffered_bytes += len(st)
+        assert self.buffered_bytes > 0
         self.tmp_fh.write(st)
         if self.buffered_bytes > self.batch_size:
             self.flush()
+            assert self.buffered_bytes == 0
 
     def flush(self):
         self.tmp_fh.close()
         logging.info('Counting batch of ~%d bytes' % self.buffered_bytes)
-        cmd = 'kmc -k%d -ci1 -fm %s %s %s' % (self.r, self.tmp_fn, self.tmp_db_fn, self.working_dir)
-        logging.info(cmd)
-        ret = os.system(cmd)
-        if ret != 0:
-            raise RuntimeError('Command "%s" returned %d' % (cmd, ret))
-        if self.first:
-            self.first = False
-            os.system('mv %s.kmc_pre %s.kmc_pre' % (self.tmp_db_fn, self.tmp_comb_fn))
-            os.system('mv %s.kmc_suf %s.kmc_suf' % (self.tmp_db_fn, self.tmp_comb_fn))
+        self.run('kmc -k%d -ci1 -fm %s %s %s' % (self.r, self.batch_mfa, self.batch_db, self.working_dir))
+        if self.first_flush:
+            self.first_flush = False
+            os.system('mv %s.kmc_pre %s.kmc_pre' % (self.batch_db, self.combined_db))
+            os.system('mv %s.kmc_suf %s.kmc_suf' % (self.batch_db, self.combined_db))
         else:
-            cmd = 'kmc_tools simple %s %s union %s' % \
-                (self.tmp_db_fn, self.tmp_comb_fn, self.tmp_combtmp_fn)
-            logging.info(cmd)
-            ret = os.system(cmd)
-            if ret != 0:
-                raise RuntimeError('Command "%s" returned %d' % (cmd, ret))
-            os.system('mv %s.kmc_pre %s.kmc_pre' % (self.tmp_combtmp_fn, self.tmp_comb_fn))
-            os.system('mv %s.kmc_suf %s.kmc_suf' % (self.tmp_combtmp_fn, self.tmp_comb_fn))
-            os.remove('%s.kmc_pre' % self.tmp_db_fn)
-            os.remove('%s.kmc_suf' % self.tmp_db_fn)
-        self.tmp_fh = open(self.tmp_fn, 'wb')
+            self.run('kmc_tools simple %s %s union %s' % (self.batch_db, self.combined_db, self.combined_tmp_db))
+            os.system('mv %s.kmc_pre %s.kmc_pre' % (self.combined_tmp_db, self.combined_db))
+            os.system('mv %s.kmc_suf %s.kmc_suf' % (self.combined_tmp_db, self.combined_db))
+            os.remove('%s.kmc_pre' % self.batch_db)
+            os.remove('%s.kmc_suf' % self.batch_db)
+        assert self.tmp_fh.closed
+        os.remove(self.batch_mfa)
+        self.tmp_fh = open(self.batch_mfa, 'wb')
         self.buffered_bytes = 0
 
     def query(self, query):
@@ -135,35 +152,37 @@ class KMC3KmerCounter(object):
 
     def query_batch(self, queries):
         """ Query with a batch of long strings """
-        if self.buffered_bytes > 0:
-            self.flush()
-        assert self.buffered_bytes == 0
+        if self.first_query:
+            if self.buffered_bytes > 0:
+                self.flush()
+            assert self.buffered_bytes == 0
+            if self.dont_care_below > 1:
+                os.system('mv %s.kmc_pre %s.kmc_pre' % (self.combined_db, self.combined_tmp_db))
+                os.system('mv %s.kmc_suf %s.kmc_suf' % (self.combined_db, self.combined_tmp_db))
+                self.run('kmc_tools transform %s reduce %s -ci%d' %
+                         (self.combined_tmp_db, self.combined_db, self.dont_care_below))
+                os.remove('%s.kmc_pre' % self.combined_tmp_db)
+                os.remove('%s.kmc_suf' % self.combined_tmp_db)
+            self.first_query = False
+        else:
+            assert self.buffered_bytes == 0
         # Write queries to multi-fasta
-        with open(self.query_fn, 'wb') as fh:
+        with open(self.query_mfa, 'wb') as fh:
             for query in queries:
                 st = b'>r\n%s\n' % query
                 fh.write(st)
         # Count k-mers (counting is redundant; we just want a set)
-        cmd = 'kmc -k%d -ci1 -fm %s %s %s' % (self.r, self.query_fn, self.tmp_db_fn, self.working_dir)
-        logging.info(cmd)
-        ret = os.system(cmd)
-        if ret != 0:
-            raise RuntimeError('Command "%s" returned %d' % (cmd, ret))
+        self.run('kmc -k%d -ci1 -fm %s %s %s' %
+                 (self.r, self.query_mfa, self.batch_db, self.working_dir))
+        os.remove(self.query_mfa)
         # Perform intersection with the big count file
-        cmd = 'kmc_tools simple %s %s intersect %s -ocleft' % (self.tmp_comb_fn, self.tmp_db_fn, self.qcounts_fn)
-        logging.info(cmd)
-        ret = os.system(cmd)
-        if ret != 0:
-            raise RuntimeError('Command "%s" returned %d' % (cmd, ret))
+        self.run('kmc_tools simple %s %s intersect %s -ocleft' %
+                 (self.combined_db, self.batch_db, self.query_counts_db))
         # Dump the intersection file
-        cmd = 'kmc_dump %s %s' % (self.qcounts_fn, self.dump_fn)
-        logging.info(cmd)
-        ret = os.system(cmd)
-        if ret != 0:
-            raise RuntimeError('Command "%s" returned %d' % (cmd, ret))
+        self.run('kmc_dump %s %s' % (self.query_counts_db, self.dump_fn))
         # Can remove query set now
-        os.remove('%s.kmc_pre' % self.tmp_db_fn)
-        os.remove('%s.kmc_suf' % self.tmp_db_fn)
+        os.remove('%s.kmc_pre' % self.batch_db)
+        os.remove('%s.kmc_suf' % self.batch_db)
         # Read in dump
         with open(self.dump_fn, 'rb') as fh:
             h = {seq: int(cnt) for seq, cnt in map(lambda x: x.rstrip().split(), fh)}
