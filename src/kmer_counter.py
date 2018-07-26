@@ -95,12 +95,12 @@ class KMC3KmerCounter(object):
         logging.info(cmd)
         ret = os.system(cmd + ' >%s 2>%s' % (self.stdout_log, self.stderr_log))
         if ret != 0:
-            msg = 'Error running command "%s"\n' + \
-                 ('Exitlevel: %d\n' % ret) + \
-                  'Output:\n' + \
-                  open(self.stdout_log, 'r').read() + '\n' + \
-                  'Error:\n' + \
-                  open(self.stderr_log, 'r').read() + '\n'
+            msg = ('Error running command "%s"\n' % cmd) + \
+                  ('Exitlevel: %d\n' % ret) + \
+                   'Output:\n' + \
+                   open(self.stdout_log, 'r').read() + '\n' + \
+                   'Error:\n' + \
+                   open(self.stderr_log, 'r').read() + '\n'
             raise RuntimeError(msg)
         return ret
 
