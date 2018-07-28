@@ -137,7 +137,7 @@ class KMC3KmerCounter(object):
     def flush(self):
         self.tmp_fh.close()
         logging.info('Counting batch of ~%d bytes' % self.buffered_bytes)
-        self.run('kmc -m%d -t%d -k%d -ci1 -fm %s %s %s' %
+        self.run('kmc -sm -m%d -t%d -k%d -ci1 -fm %s %s %s' %
                  (self.gb, self.threads, self.r, self.batch_mfa, self.batch_db, self.working_dir))
         if self.first_flush:
             self.first_flush = False
@@ -183,7 +183,7 @@ class KMC3KmerCounter(object):
                 st = b'>r\n%s\n' % query
                 fh.write(st)
         # Count k-mers (counting is redundant; we just want a set)
-        self.run('kmc -m%d -t%d -k%d -ci1 -fm %s %s %s' %
+        self.run('kmc -sm -m%d -t%d -k%d -ci1 -fm %s %s %s' %
                  (self.gb, self.threads, self.r, self.query_mfa, self.batch_db, self.working_dir))
         os.remove(self.query_mfa)
         # Perform intersection with the big count file
