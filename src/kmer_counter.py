@@ -34,7 +34,8 @@ class SimpleKmerCounter(object):
     Use collections.Counter and do exact counting
     """
 
-    def __init__(self, name, r, dont_care_below=1, temp=None):
+    def __init__(self, name, r, dont_care_below=1,
+                 temp=None, cache_from=None, cache_to=None):
         self.name = name
         self.r = r
         self.counter = Counter()
@@ -48,6 +49,12 @@ class SimpleKmerCounter(object):
         return len(kmers)
 
     def flush(self):
+        pass  # nop
+
+    def finalize(self):
+        pass  # nop
+
+    def cache_to(self):
         pass  # nop
 
     def query(self, query):
@@ -65,7 +72,7 @@ class SimpleKmerCounter(object):
 class KMC3KmerCounter(object):
 
     def __init__(self,  name, r, threads=1, gb=4, batch_size=-1,
-                 dont_care_below=1, temp=None):
+                 dont_care_below=1, temp=None, cache_from=None, cache_to=None):
         self.name = name
         self.r = r
         self.tmp_dir = tempfile.mkdtemp(dir=temp)
@@ -74,7 +81,7 @@ class KMC3KmerCounter(object):
         assert not os.path.exists(self.working_dir)
         os.mkdir(self.working_dir)
         self.batch_db = os.path.join(self.tmp_dir, 'batch.db')
-        self.combined_db = os.path.join(self.tmp_dir, 'combined.db')
+        self.combined_db = os.path.join(self.tmp_dir, name + '.db')
         self.combined_tmp_db = os.path.join(self.tmp_dir, 'combined_tmp.db')
         self.tmp_fh = open(self.batch_mfa, 'wb')
         self.query_mfa = os.path.join(self.tmp_dir, 'query.mfa')
@@ -83,11 +90,23 @@ class KMC3KmerCounter(object):
         self.buffered_bytes = 0
         self.batch_size = batch_size
         self.dont_care_below = dont_care_below
-        self.first_flush = self.first_query = True
+        self.first_flush = True
         self.stdout_log = os.path.join(self.tmp_dir, 'stdout.log')
         self.stderr_log = os.path.join(self.tmp_dir, 'stderr.log')
         self.gb = gb
         self.threads = threads
+        self.cache_from_dir = cache_from
+        self.cache_to_dir = cache_to
+        self.cached_to = False
+        if cache_from is not None:
+            for suf in ['.kmc_pre', '.kmc_suf']:
+                fn = name + '.db' + suf
+                if not os.path.exists(os.path.join(cache_from, fn)):
+                    logging.warn('    cache-from enabled but could not find file "%s"' % fn)
+                    self.cache_from_dir = None
+                    break
+            self.combined_db = os.path.join(cache_from, name + '.db')
+        self.finalized = self.cache_from_dir is not None
         logging.info('    Initialized KMC3 k-mer counter with k=%d, gb=%d, threads=%d and batch_size=%d' %
                      (self.r, self.gb, self.threads, self.batch_size))
 
@@ -121,7 +140,9 @@ class KMC3KmerCounter(object):
         shutil.rmtree(self.working_dir)
 
     def add(self, s):
-        if not self.first_query:
+        if self.cache_from_dir is not None:
+            raise RuntimeError('Cannot add to counter taken from cache')
+        if self.finalized:
             raise RuntimeError('Cannot add after first query')
         assert isinstance(s, bytes)
         assert not self.tmp_fh.closed
@@ -135,6 +156,8 @@ class KMC3KmerCounter(object):
             assert self.buffered_bytes == 0
 
     def flush(self):
+        if self.cache_from_dir is not None:
+            raise RuntimeError('Cannot flush counter taken from cache')
         self.tmp_fh.close()
         logging.info('Counting batch of ~%d bytes' % self.buffered_bytes)
         self.run('kmc -sm -m%d -t%d -k%d -ci1 -fm %s %s %s' %
@@ -156,16 +179,12 @@ class KMC3KmerCounter(object):
         self.tmp_fh = open(self.batch_mfa, 'wb')
         self.buffered_bytes = 0
 
-    def query(self, query):
-        assert isinstance(query, bytes)
-        for x in self.query_batch([query]):
-            yield x
-
-    def query_batch(self, queries):
-        """ Query with a batch of long strings """
-        if self.first_query:
+    def finalize(self):
+        if not self.finalized:
             if self.buffered_bytes > 0:
                 self.flush()
+            if self.cache_from_dir is not None:
+                raise RuntimeError('Cannot finalize counter taken from cache')
             assert self.buffered_bytes == 0
             if self.dont_care_below > 1:
                 os.system('mv %s.kmc_pre %s.kmc_pre' % (self.combined_db, self.combined_tmp_db))
@@ -174,9 +193,30 @@ class KMC3KmerCounter(object):
                          (self.threads, self.combined_tmp_db, self.combined_db, self.dont_care_below))
                 os.remove('%s.kmc_pre' % self.combined_tmp_db)
                 os.remove('%s.kmc_suf' % self.combined_tmp_db)
-            self.first_query = False
+            self.finalized = True
+            self._cache_to()
         else:
             assert self.buffered_bytes == 0
+
+    def _cache_to(self):
+        if self.cache_to_dir is not None and not self.cached_to:
+            name = os.path.basename(self.combined_db)
+            full = os.path.join(self.cache_to_dir, name)
+            for suf in ['.kmc_pre', '.kmc_suf']:
+                shutil.move(self.combined_db + suf, full + suf)
+                assert not os.path.exists(self.combined_db + suf)
+                assert os.path.exists(full + suf)
+            self.combined_db = full
+            self.cached_to = True
+
+    def query(self, query):
+        assert isinstance(query, bytes)
+        for x in self.query_batch([query]):
+            yield x
+
+    def query_batch(self, queries):
+        """ Query with a batch of long strings """
+        self.finalize()
         # Write queries to multi-fasta
         with open(self.query_mfa, 'wb') as fh:
             for query in queries:

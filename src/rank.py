@@ -13,9 +13,10 @@ import sys
 from operator import itemgetter
 from util import PseudocontigIterator, vec_to_id, get_next_vector
 import re
+import os
 
 
-VERSION = '0.0.3'
+VERSION = '0.0.4'
 
 
 class VarRanker:
@@ -39,11 +40,13 @@ class VarRanker:
         self.counter_type = counter_type
         self.temp = temp
 
-    def counter_maker(self, name, dont_care_below=1):
+    def counter_maker(self, name, dont_care_below=1, cache_from=None, cache_to=None):
         if self.counter_type == 'Simple':
             return kmer_counter.SimpleKmerCounter(name, self.r,
                                                   dont_care_below=dont_care_below,
-                                                  temp=self.temp)
+                                                  temp=self.temp,
+                                                  cache_from=cache_from,
+                                                  cache_to=cache_to)
         elif self.counter_type.startswith('KMC3'):
             toks = self.counter_type.split(',')
             threads, gb, batch_sz = 1, 4, -1
@@ -57,122 +60,153 @@ class VarRanker:
                                                 threads=threads, gb=gb,
                                                 batch_size=batch_sz,
                                                 dont_care_below=dont_care_below,
-                                                temp=self.temp)
+                                                temp=self.temp,
+                                                cache_from=cache_from,
+                                                cache_to=cache_to)
 
-    def avg_read_prob(self):
+    def avg_read_prob(self, cache_from=None, cache_to=None):
         logging.info('  Calculating average read probabilities')
         if self.wgt_ref and self.wgt_added:
             return
 
-        # Average probability (weighted by genome length) of a specific read from the linear genome being chosen 
-        total_prob_ref, count_ref = 0, 0
+        if cache_from is not None:
+            fn = os.path.join(cache_from, 'weights.csv')
+            logging.info('    retrieving from cache file "%s"' % fn)
+            with open(fn, 'rb') as fh:
+                toks = fh.read().strip().split(',')
+                self.wgt_ref = float(toks[0])
+                self.wgt_added = float(toks[1])
+        else:
+            # Average probability (weighted by genome length) of a specific read from the linear genome being chosen 
+            total_prob_ref, count_ref = 0, 0
 
-        # Average probability (weighted by genome length) of a specific read from the added pseudocontigs being chosen 
-        total_prob_added, count_added = 0, 0
+            # Average probability (weighted by genome length) of a specific read from the added pseudocontigs being chosen 
+            total_prob_added, count_added = 0, 0
 
-        if self.hap_parser is not None:
-            self.hap_parser.reset_chunk()
+            if self.hap_parser is not None:
+                self.hap_parser.reset_chunk()
 
-        r = self.r
+            r = self.r
 
-        all_acgt_re = re.compile("^[ACGTacgt]*$")
+            all_acgt_re = re.compile("^[ACGTacgt]*$")
 
-        last_i, last_j, last_pref, last_added = -1, -1, -1, -1
-        for chrom, seq in self.genome.items():
-            variants = self.variants[chrom]
-            num_v = len(variants)
-            var_i = 0
-            logging.info('    Processing chrom %s' % chrom)
-            num_reads = self.chrom_lens[chrom] - r + 1
-            count_ref += num_reads
-            for i in range(num_reads):
-                read = seq[i:i+r]
-                if not all_acgt_re.match(read):
-                    count_ref -= 1
-                    continue
+            last_i, last_j, last_pref, last_added = -1, -1, -1, -1
+            for chrom, seq in self.genome.items():
+                variants = self.variants[chrom]
+                num_v = len(variants)
+                var_i = 0
+                logging.info('    Processing chrom %s' % chrom)
+                num_reads = self.chrom_lens[chrom] - r + 1
+                count_ref += num_reads
+                for i in range(num_reads):
+                    read = seq[i:i+r]
+                    if not all_acgt_re.match(read):
+                        count_ref -= 1
+                        continue
 
-                # Set [var_i, var_j) to the range of variants contained in the current read
-                while var_i < num_v and variants.poss[var_i] < i:
-                    var_i += 1
-                var_j = var_i
-                while var_j < num_v and variants.poss[var_j] < i+r:
-                    var_j += 1
-                num_vars = var_j - var_i
+                    # Set [var_i, var_j) to the range of variants contained in the current read
+                    while var_i < num_v and variants.poss[var_i] < i:
+                        var_i += 1
+                    var_j = var_i
+                    while var_j < num_v and variants.poss[var_j] < i+r:
+                        var_j += 1
+                    num_vars = var_j - var_i
 
-                if num_vars == 0:
-                    total_prob_ref += 1
-                    continue
+                    if num_vars == 0:
+                        total_prob_ref += 1
+                        continue
 
-                '''
-                counts = [variants[n].num_alts for n in range(var_i, var_j)]
-                p = 1 - self.prob_read(variants, range(var_i, var_j), [0]*num_vars)
-                total_prob_ref -= p
-                total_prob_added += p
-                num_pcs = 1
-                for c in range(var_i, var_j):
-                    num_pcs *= (variants[c].num_alts + 1)
-                count_added += num_pcs-1
-
-                curr_count_added = 0
-                counts = [variants[n].num_alts for n in range(var_i, var_j)]
-                total_prob_ref2 += self.prob_read(variants, range(var_i, var_j), [0]*num_vars)
-
-                curr_p = self.prob_read(variants, range(var_i, var_j), [0]*num_vars)
-
-                vec = get_next_vector(num_vars, counts, [0]*num_vars)
-                while vec:
-                    p = self.prob_read(variants, range(var_i, var_j), vec)
-                    curr_p += p
+                    '''
+                    counts = [variants[n].num_alts for n in range(var_i, var_j)]
+                    p = 1 - self.prob_read(variants, range(var_i, var_j), [0]*num_vars)
                     total_prob_ref -= p
                     total_prob_added += p
-                    count_added += 1
-                    curr_count_added += 1
+                    num_pcs = 1
+                    for c in range(var_i, var_j):
+                        num_pcs *= (variants[c].num_alts + 1)
+                    count_added += num_pcs-1
 
-                    vec = get_next_vector(num_vars, counts, vec)
+                    curr_count_added = 0
+                    counts = [variants[n].num_alts for n in range(var_i, var_j)]
+                    total_prob_ref2 += self.prob_read(variants, range(var_i, var_j), [0]*num_vars)
 
-                if abs(1 - curr_p) > 0.001:
-                    print('%d (%d - %d)' % (num_vars, var_i, var_j))
-                    print('Total prob: %f' % curr_p)
-                '''
+                    curr_p = self.prob_read(variants, range(var_i, var_j), [0]*num_vars)
 
-                if var_i == last_i and var_j == last_j:
-                    p_ref = last_pref
-                    p_alts = 1 - p_ref
-                    count_added += last_added-1
-                else:
-                    last_added = 1
-                    for c in range(var_i, min(var_j, var_i+self.max_v_in_window)):
-                        last_added *= (variants.num_alts(c) + 1)
-                    count_added += last_added-1
+                    vec = get_next_vector(num_vars, counts, [0]*num_vars)
+                    while vec:
+                        p = self.prob_read(variants, range(var_i, var_j), vec)
+                        curr_p += p
+                        total_prob_ref -= p
+                        total_prob_added += p
+                        count_added += 1
+                        curr_count_added += 1
 
-                    p_ref = self.prob_read_ref(variants, range(var_i, var_j))
-                    p_alts = 1 - p_ref
-                total_prob_ref += p_ref
-                total_prob_added += p_alts
+                        vec = get_next_vector(num_vars, counts, vec)
 
-                last_i = var_i
-                last_j = var_j
-                last_pref = p_ref
+                    if abs(1 - curr_p) > 0.001:
+                        print('%d (%d - %d)' % (num_vars, var_i, var_j))
+                        print('Total prob: %f' % curr_p)
+                    '''
 
-        self.wgt_ref = float(total_prob_ref) / count_ref
-        self.wgt_added = float(total_prob_added) / count_added
+                    if var_i == last_i and var_j == last_j:
+                        p_ref = last_pref
+                        p_alts = 1 - p_ref
+                        count_added += last_added-1
+                    else:
+                        last_added = 1
+                        for c in range(var_i, min(var_j, var_i+self.max_v_in_window)):
+                            last_added *= (variants.num_alts(c) + 1)
+                        count_added += last_added-1
+
+                        p_ref = self.prob_read_ref(variants, range(var_i, var_j))
+                        p_alts = 1 - p_ref
+                    total_prob_ref += p_ref
+                    total_prob_added += p_alts
+
+                    last_i = var_i
+                    last_j = var_j
+                    last_pref = p_ref
+
+            self.wgt_ref = float(total_prob_ref) / count_ref
+            self.wgt_added = float(total_prob_added) / count_added
+
+        if cache_to is not None:
+            fn = os.path.join(cache_to, 'weights.csv')
+            logging.info('  Caching average probabilities in "%s"' % fn)
+            with open(fn, 'wb') as fh:
+                fh.write(b'%f,%f\n' % (self.wgt_ref, self.wgt_added))
+
         logging.info('  Avg probability of reads in ref:  %f' % self.wgt_ref)
         logging.info('  Avg probability of added reads:   %f' % self.wgt_added)
 
-    def count_kmers_ref(self):
+    def count_kmers_ref(self, cache_from=None, cache_to=None):
         logging.info('  Counting reference k-mers')
-        self.h_ref = self.counter_maker('Ref', dont_care_below=1)
+        self.h_ref = self.counter_maker('Ref', dont_care_below=1,
+                                        cache_from=cache_from,
+                                        cache_to=cache_to)
+        if cache_from is not None:
+            logging.info('    retrieving from cache file "%s"' % self.h_ref.combined_db)
+            return
+
         n_pcs, tot_pc_len = 0, 0
         for chrom in self.genome.values():
             self.h_ref.add(chrom)
             n_pcs += 1
             tot_pc_len += len(chrom)
             logging.info('    %d contigs, %d bases' % (n_pcs, tot_pc_len))
-        self.h_ref.flush()
+        self.h_ref.finalize()
 
-    def count_kmers_added(self):
+    def count_kmers_added(self, cache_from=None, cache_to=None):
         logging.info('  Counting augmented k-mers')
-        self.h_added = self.counter_maker('Aug', dont_care_below=2)
+        self.h_added = self.counter_maker('Aug', dont_care_below=2,
+                                          cache_from=cache_from,
+                                          cache_to=cache_to)
+
+        if cache_from is not None:
+            logging.info('    retrieving from cache file "%s"' % self.h_added.combined_db)
+            self.h_added.finalize()
+            return
+
         n_pcs, n_vars, max_vars = 0, 0, 0
         incr = 1.1
         bar = 1000
@@ -204,7 +238,7 @@ class VarRanker:
                         logging.info('    %d contigs, %d vars; max vars=%d; %0.3f%% done' %
                                      (n_pcs, n_vars, max_vars, 100.0*float(n_vars)/self.num_v))
                     self.h_added.add(pc)
-        self.h_added.flush()
+        self.h_added.finalize()
 
     def prob_read(self, variants, var_ids, vec):
         """
@@ -253,14 +287,15 @@ class VarRanker:
                 p *= (1 - variants.sum_probs(vi))
             return p
 
-    def rank(self, method, out_file, query_batch_size=1000000):
+    def rank(self, method, out_file, query_batch_size=1000000,
+             cache_from=None, cache_to=None):
         ordered_blowup = None
         if method == 'popcov':
             ordered = self.rank_pop_cov()
         elif method == 'popcov-blowup':
             ordered = self.rank_pop_cov(True)
         elif method == 'hybrid':
-            self.count_kmers()
+            self.count_kmers(cache_from=cache_from, cache_to=cache_to)
             ordered, ordered_blowup = self.rank_hybrid(query_batch_size=query_batch_size)
         else:
             raise RuntimeError('Bad ordering method: "%s"' % method)
@@ -273,11 +308,11 @@ class VarRanker:
             with open(out_file + '.blowup', 'w') as f:
                 f.write('\t'.join([tup[0] + ',' + str(tup[1] + 1) for tup in ordered_blowup]))
 
-    def count_kmers(self):
+    def count_kmers(self, cache_from=None, cache_to=None):
         logging.info('  Counting k-mers')
-        self.count_kmers_ref()
-        self.count_kmers_added()
-        self.avg_read_prob()
+        self.count_kmers_ref(cache_from=cache_from, cache_to=cache_to)
+        self.count_kmers_added(cache_from=cache_from, cache_to=cache_to)
+        self.avg_read_prob(cache_from=cache_from, cache_to=cache_to)
 
     def rank_hybrid(self, threshold=0.5, query_batch_size=1000000):
         """
@@ -623,7 +658,11 @@ def go(args):
         raise RuntimeError('--pseudocontigs not supported')
         #ranker.seen_pcs(o)
     else:
-        ranker.rank(args.method, o, query_batch_size=args.query_batch)
+        if args.cache_to is not None:
+            if not os.path.exists(args.cache_to):
+                os.makedirs(args.cache_to)
+        ranker.rank(args.method, o, query_batch_size=args.query_batch,
+                    cache_from=args.cache_from, cache_to=args.cache_to)
 
 
 if __name__ == '__main__':
@@ -647,22 +686,27 @@ if __name__ == '__main__':
         help='Path to fasta file containing reference genome')
     parser.add_argument('--temp', type=str, required=False, 
         help='Set base temporary directory')
-    parser.add_argument("--vars", type=str, required=True,
-        help="Path to 1ksnp file containing variant information")
-    parser.add_argument('--chrom', type=str,
+    parser.add_argument("--vars", type=str, required=True, metavar='<path>',
+        help="1ksnp file containing variant information")
+    parser.add_argument('--chrom', type=str, metavar='<name>',
         help='Name of chromosome from reference genome to process. If not '
              'present, process all chromosomes.')
-    parser.add_argument('--window-size', type=int,
+    parser.add_argument('--window-size', type=int, metavar='<int>',
         help='Radius of window (i.e. max read length) to use. Larger values '
              'will take longer. Default: 35')
-    parser.add_argument('--query-batch', type=int, default=1000000,
-        help='Number of queries to batch when querying k-mer counts')
+    parser.add_argument('--query-batch', type=int, default=100000000, metavar='<int>',
+        help='Number of queries to batch when querying k-mer counts; '
+             'default: 100000000')
     parser.add_argument('--pseudocontigs', action="store_true",
         help=argparse.SUPPRESS) # help='Rank pseudocontigs rather than SNPs')
-    parser.add_argument('--phasing', type=str, required=False,
-        help="Path to file containing phasing information for each individual")
-    parser.add_argument('--output', type=str, required=False,
-        help="Path to file to write output ranking to. Default: 'ordered.txt'")
+    parser.add_argument('--phasing', type=str, required=False, metavar='<path>',
+        help="File containing phasing information for each individual")
+    parser.add_argument('--output', type=str, required=False, metavar='<path>',
+        help="File to write output ranking to. Default: 'ordered.txt'")
+    parser.add_argument('--cache-to', type=str, required=False,
+        metavar='<path>', help="Cache results in given directory")
+    parser.add_argument('--cache-from', type=str, required=False,
+        metavar='<path>', help="Use cached results from given directory")
     parser.add_argument('--counter', type=str, required=False, default='KMC3',
         help='Type of counter to use; options are: "Simple"; '
              '"KMC3,<threads>,<gb>,<batch_size>"')
