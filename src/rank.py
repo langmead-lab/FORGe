@@ -21,7 +21,8 @@ VERSION = '0.0.4'
 
 class VarRanker:
 
-    def __init__(self, genome, variants, r, phasing, max_v, counter_type, temp):
+    def __init__(self, genome, variants, r, phasing, max_v, bulk_counter_type,
+                 fast_counter_type, temp):
         logging.info('Creating ranker')
         self.genome = genome
         self.chrom_lens = dict()
@@ -37,25 +38,23 @@ class VarRanker:
         self.wgt_ref = self.wgt_added = None
         self.curr_vars = None
         self.freqs = {}
-        self.counter_type = counter_type
+        self.bulk_counter_type = bulk_counter_type
+        self.fast_counter_type = fast_counter_type
         self.temp = temp
 
-    def counter_maker(self, name, dont_care_below=1, cache_from=None, cache_to=None):
-        if self.counter_type == 'Simple':
+    def counter_maker(self, name, bulk=True, dont_care_below=1, cache_from=None, cache_to=None):
+        counter_type = self.bulk_counter_type if bulk else self.fast_counter_type
+        toks = counter_type.split(',')
+        if counter_type == 'Simple':
             return kmer_counter.SimpleKmerCounter(name, self.r,
                                                   dont_care_below=dont_care_below,
                                                   temp=self.temp,
                                                   cache_from=cache_from,
                                                   cache_to=cache_to)
-        elif self.counter_type.startswith('KMC3'):
-            toks = self.counter_type.split(',')
-            threads, gb, batch_sz = 1, 4, -1
-            if len(toks) > 1:
-                threads = int(toks[1])
-            if len(toks) > 2:
-                gb = int(toks[2])
-            if len(toks) > 3:
-                batch_sz = int(toks[3])
+        elif counter_type.startswith('KMC3'):
+            threads = int(toks[1]) if len(toks) > 1 else 0
+            gb = int(toks[2]) if len(toks) > 2 else 4
+            batch_sz = int(toks[3]) if len(toks) > 3 else -1
             return kmer_counter.KMC3KmerCounter(name, self.r,
                                                 threads=threads, gb=gb,
                                                 batch_size=batch_sz,
@@ -63,6 +62,12 @@ class VarRanker:
                                                 temp=self.temp,
                                                 cache_from=cache_from,
                                                 cache_to=cache_to)
+        elif counter_type.startswith('Bounter'):
+            size_mb = int(toks[1]) if len(toks) > 1 else 1024
+            log_counting = int(toks[2]) if len(toks) > 2 else 8
+            return kmer_counter.BounterKmerCounter(name, self.r,
+                                                   size_mb=size_mb,
+                                                   log_counting=log_counting)
 
     def avg_read_prob(self, cache_from=None, cache_to=None):
         logging.info('  Calculating average read probabilities')
@@ -181,7 +186,8 @@ class VarRanker:
 
     def count_kmers_ref(self, cache_from=None, cache_to=None):
         logging.info('  Counting reference k-mers')
-        self.h_ref = self.counter_maker('Ref', dont_care_below=1,
+        self.h_ref = self.counter_maker('Ref', bulk=True,
+                                        dont_care_below=1,
                                         cache_from=cache_from,
                                         cache_to=cache_to)
         if cache_from is not None:
@@ -198,7 +204,8 @@ class VarRanker:
 
     def count_kmers_added(self, cache_from=None, cache_to=None):
         logging.info('  Counting augmented k-mers')
-        self.h_added = self.counter_maker('Aug', dont_care_below=2,
+        self.h_added = self.counter_maker('Aug', bulk=True,
+                                          dont_care_below=2,
                                           cache_from=cache_from,
                                           cache_to=cache_to)
 
@@ -287,8 +294,8 @@ class VarRanker:
                 p *= (1 - variants.sum_probs(vi))
             return p
 
-    def rank(self, method, out_file, query_batch_size=1000000,
-             cache_from=None, cache_to=None):
+    def rank(self, method, out_file, bounter_size_mb=1024*1024,
+             bounter_log_counting=8, cache_from=None, cache_to=None):
         ordered_blowup = None
         if method == 'popcov':
             ordered = self.rank_pop_cov()
@@ -296,7 +303,8 @@ class VarRanker:
             ordered = self.rank_pop_cov(True)
         elif method == 'hybrid':
             self.count_kmers(cache_from=cache_from, cache_to=cache_to)
-            ordered, ordered_blowup = self.rank_hybrid(query_batch_size=query_batch_size)
+            ordered, ordered_blowup = self.rank_hybrid(size_mb=bounter_size_mb,
+                                                       log_counting=bounter_log_counting)
         else:
             raise RuntimeError('Bad ordering method: "%s"' % method)
 
@@ -314,7 +322,7 @@ class VarRanker:
         self.count_kmers_added(cache_from=cache_from, cache_to=cache_to)
         self.avg_read_prob(cache_from=cache_from, cache_to=cache_to)
 
-    def rank_hybrid(self, threshold=0.5, query_batch_size=1000000, size_mb=1024, log_counting=8):
+    def rank_hybrid(self, threshold=0.5, size_mb=1024, log_counting=8):
         """
         `threshold` for blowup avoidance
         """
@@ -591,7 +599,8 @@ def go(args):
     r = args.window_size or 35
     o = args.output or 'ordered.txt'
     max_v = args.prune or r
-    counter_type = args.counter or 'KMC3'
+    bulk_counter_type = args.counter or 'KMC3'
+    fast_counter_type = args.counter or 'Bounter'
 
     logging.info('Reading genome')
     genome = read_genome(args.reference, target_chrom=args.chrom)
@@ -599,7 +608,8 @@ def go(args):
     logging.info('Parsing 1ksnp')
     vars = parse_1ksnp(args.vars, G=genome, target_chrom=args.chrom)
 
-    ranker = VarRanker(genome, vars, r, args.phasing, max_v, counter_type, args.temp)
+    ranker = VarRanker(genome, vars, r, args.phasing, max_v,
+                       bulk_counter_type, fast_counter_type, args.temp)
     if args.pseudocontigs:
         raise RuntimeError('--pseudocontigs not supported')
         #ranker.seen_pcs(o)
@@ -607,8 +617,9 @@ def go(args):
         if args.cache_to is not None:
             if not os.path.exists(args.cache_to):
                 os.makedirs(args.cache_to)
-        ranker.rank(args.method, o, query_batch_size=args.query_batch,
-                    cache_from=args.cache_from, cache_to=args.cache_to)
+        ranker.rank(args.method, o, cache_from=args.cache_from,
+                    cache_to=args.cache_to,
+                    bounter_size_mb=int(args.fast_counter_mb)/2)
 
 
 if __name__ == '__main__':
@@ -653,9 +664,19 @@ if __name__ == '__main__':
         metavar='<path>', help="Cache results in given directory")
     parser.add_argument('--cache-from', type=str, required=False,
         metavar='<path>', help="Use cached results from given directory")
-    parser.add_argument('--counter', type=str, required=False, default='KMC3',
-        help='Type of counter to use; options are: "Simple"; '
-             '"KMC3,<threads>,<gb>,<batch_size>"')
+    parser.add_argument('--bulk-counter', type=str, required=False, default='KMC3',
+        help='Counter data structure for bulk-counting k-mers in the reference '
+             'and augmented genomes in --method hybrid mode; options are: "Simple"; '
+             '"KMC3,<threads>,<gb>,<batch_size>"; '
+             '"Bounter,<size_mb>,<log_counting>"')
+    parser.add_argument('--fast-counter-mb', type=int, required=False, default=1024,
+        help='Total MB allocated to the fast k-mer counters used to score '
+             'variants in --method hybrid mode.')
+    #parser.add_argument('--fast-counter', type=str, required=False, default='KMC3',
+    #    help='Counter data structure for calculating variant scores in '
+    #         '--method hybrid mode ; options are: "Simple"; '
+    #         '"KMC3,<threads>,<gb>,<batch_size>"; '
+    #         '"Bounter,<size_mb>,<log_counting>"')
     parser.add_argument('--prune', type=int, required=False,
         help='In each window, prune haplotypes by only processing up to '
              'this many variants. We recommend including this argument when '
