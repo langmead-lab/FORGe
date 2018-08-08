@@ -5,6 +5,8 @@
 // This code is distributed under the terms and conditions
 // from the MIT License (MIT).
 
+// Adapted for use with FORGe by Ben Langmead
+
 #define CMS_TYPE CMS_Log8
 #define CMS_TYPE_STRING "CMS_Log8"
 #define CMS_CELL_TYPE uint8_t

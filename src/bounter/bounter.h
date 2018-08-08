@@ -1,14 +1,17 @@
-#include <stdint.h>
+// Originally from https://github.com/RaRe-Technologies/bounter
+// Copyright (c) 2017 Rare Technologies under MIT license
+//
+// Adapted for use with FORGe by Ben Langmead
 
-// TODO: avoid void *; here it's used because bounter doesn't have header
-// files we can include to get the proper struct definitions
+#include <stdint.h>
 
 extern void *bounter_new(int width, int depth);
 
 extern void bounter_delete(void *sketch);
 
 /**
- * Given a string, extract every k-mer, canonicalize, and add to the QF.
+ * Given a string, extract every k-mer, canonicalize, and add to the bounter
+ * sketch.
  */
 extern int bounter_string_injest(
     void *sketch,            // bounter sketch
@@ -17,10 +20,18 @@ extern int bounter_string_injest(
     size_t read_len);        // length of string
 
 /**
+ * Given a file with k-mer / count pairs, add to the bounter sketch.
+ */
+extern int bounter_tsv_injest(
+    void *sketch,           // bounter sketch
+    int k,                  // k-mer length
+    const char *filename);  // TSV filename
+
+/**
  * Assumes no locking is needed, i.e. that no other thread
  * is trying to update the CQF.
  */
-int bounter_string_query(
+extern int bounter_string_query(
     void *sketch,            // bounter sketch
     int k,                   // k-mer length
     const char *read_orig,   // query string

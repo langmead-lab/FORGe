@@ -5,6 +5,8 @@
 // This code is distributed under the terms and conditions
 // from the MIT License (MIT).
 
+// Adapted for use with FORGe by Ben Langmead
+
 #define GLUE(x,y) x##y
 #define GLUE_I(x,y) GLUE(x, y)
 #define CMS_VARIANT(suffix) GLUE_I(CMS_TYPE, suffix)

@@ -8,6 +8,8 @@
 // compile and run any of them on any platform, but your performance with the
 // non-native version will be less than optimal.
 
+// Adapted for use with FORGe by Ben Langmead
+
 #include "murmur3.h"
 
 //-----------------------------------------------------------------------------

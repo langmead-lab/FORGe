@@ -1,9 +1,15 @@
+// Originally from https://github.com/RaRe-Technologies/bounter
+// Copyright (c) 2017 Rare Technologies under MIT license
+//
+// Adapted for use with FORGe by Ben Langmead
+
 #include <sys/stat.h>
 #include <stdint.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "cms_log8.c"
 
 #define BITMASK(nbits) ((nbits) == 64 ? 0xffffffffffffffff : \
@@ -140,7 +146,8 @@ static b256 *b256_min(b256 *a, b256 *b) {
 }
 
 /**
- * Given a string, extract every k-mer, canonicalize, and add to the QF.
+ * Given a string, extract every k-mer, canonicalize, and add to the bounter
+ * sketch.
  */
 int bounter_string_injest(
     CMS_Log8 *sketch,       // bounter sketch
@@ -198,6 +205,89 @@ int bounter_string_injest(
     return nadded;
 }
 
+/**
+ * Given a file with k-mer / count pairs, add to the bounter sketch.
+ */
+int bounter_tsv_injest(
+    CMS_Log8 *sketch,       // bounter sketch
+    int k,                  // k-mer length
+    const char *filename)   // TSV filename
+{
+    if(k > 127) {
+        fprintf(stderr, "No support for k-mers sizes over 127; k-mer size "
+                "%u was specified\n", k);
+        return -1;
+    }
+    FILE *f = fopen(filename, "rb");
+    if(f == NULL) {
+        fprintf(stderr, "Could not open input tsv file \"%s\"\n", filename);
+        exit(1);
+    }
+    int64_t nadded = 0;
+    while(!feof(f)) {
+        b256 kmer;
+        b256_clear(&kmer);
+        int c = fgetc(f);
+        while(!feof(f) && isspace(c)) {
+            c = fgetc(f);
+        }
+        if(feof(f)) {
+            break;  // done
+        }
+        assert(!isspace(c));
+        int nchar = 0, nline = 0;
+        while(!isspace(c)) {
+            uint8_t curr = map_base(c);
+            if(curr >= 4) {
+                fprintf(stderr, "Bad base on line %d of tsv file \"%c\"\n", nline, curr);
+                exit(1);
+            }
+            b256_lshift(&kmer);
+            b256_or_low(&kmer, curr);
+            nchar++;
+            c = fgetc(f);
+        }
+        if(nchar != k) {
+            fprintf(stderr, "Expected k-mer length %d, but got %d on line %d\n", k, nchar, nline);
+            exit(1);
+        }
+        
+        assert(c == '\t');
+        c = fgetc(f);
+        int64_t count = 0;
+        while(!isspace(c)) {
+            if(c < '0' || c > '9') {
+                fprintf(stderr, "Bad digit on line %d of tsv file \"%c\"\n", nline, c);
+                exit(1);
+            }
+            count *= 10;
+            count += (c - '0');
+            c = fgetc(f);
+        }
+        assert(c == '\n');
+        nline++;
+        
+#ifndef NDEBUG
+        b256 kmer_rev;
+        b256_clear(&kmer_rev);
+        b256_revcomp(&kmer, &kmer_rev, k);
+        b256 *item = b256_min(&kmer, &kmer_rev);
+        assert(item == &kmer);
+#endif
+      
+        CMS_Log8_increment_obj(sketch, (char *)&kmer, sizeof(kmer), count);
+
+#ifndef NDEBUG
+        long long scount = CMS_Log8_getitem(sketch, (char *)&kmer, sizeof(kmer));
+        assert(scount >= count);  // could be higher due to collisions
+#endif
+
+        nadded += count;
+    }
+    fclose(f);
+    return nadded;
+}
+
 void *bounter_new(int width, int depth) {
     CMS_Log8 *sketch = calloc(sizeof(CMS_Log8), 1);
     CMS_Log8_init(sketch, width, depth);
@@ -210,8 +300,8 @@ void bounter_delete(void *sketch) {
 }
 
 /**
- * Assumes no locking is needed, i.e. that no other thread
- * is trying to update the CQF.
+ * Given query string, query bounter sketch with every k-mer, returning array
+ * of counts.
  */
 int bounter_string_query(
     CMS_Log8 *sketch,       // bounter sketch
@@ -388,6 +478,7 @@ int main(int argc, char *argv[]) {
 
     if(argc < 5) {
         fprintf(stderr, "Need at least 4 args\n");
+        fprintf(stderr, "  ./bounter <k> <width> <depth> <ref> <query1> [<query2>...]\n");
         return 1;
     }
 
@@ -405,10 +496,18 @@ int main(int argc, char *argv[]) {
     const char *ref = argv[4];
     int added = 0;
     if(fexists(ref)) {
-        fprintf(stderr, "Building reference from file: \"%s\"\n", ref);
-        char *text = fslurp(ref);
-        added = bounter_string_injest(&sketch, ksize, text, strlen(text));
-        free(text);
+        const size_t reflen = strlen(ref);
+        if(strncmp(ref + reflen - 4, ".tsv", 4) == 0) {
+            // TSV file
+            fprintf(stderr, "Building reference from TSV file: \"%s\"\n", ref);
+            added = bounter_tsv_injest(&sketch, ksize, ref);
+        } else {
+            // Normal file
+            fprintf(stderr, "Building reference from regular file: \"%s\"\n", ref);
+            char *text = fslurp(ref);
+            added = bounter_string_injest(&sketch, ksize, text, strlen(text));
+            free(text);
+        }
     } else {
         fprintf(stderr, "Building reference from string: \"%s\"\n", ref);
         added = bounter_string_injest(&sketch, ksize, ref, strlen(ref));
