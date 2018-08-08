@@ -3,6 +3,7 @@ channels:
   - defaults
   - conda-forge
   - bioconda
+  - derickl
 dependencies:
   - pytest==3.6.2
   - future==0.16.0
