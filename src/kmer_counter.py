@@ -34,6 +34,20 @@ def slice(st, r):
                range(len(st) - r + 1))
 
 
+def run(cmd, stdout, stderr):
+    logging.info(cmd)
+    ret = os.system(cmd + ' >%s 2>%s' % (stdout, stderr))
+    if ret != 0:
+        msg = ('Error running command "%s"\n' % cmd) + \
+              ('Exitlevel: %d\n' % ret) + \
+               'Output:\n' + \
+               open(stdout, 'r').read() + '\n' + \
+               'Error:\n' + \
+               open(stderr, 'r').read() + '\n'
+        raise RuntimeError(msg)
+    return ret
+
+
 class SimpleKmerCounter(object):
     """
     Use collections.Counter and do exact counting
@@ -96,8 +110,8 @@ class KMC3KmerCounter(object):
         self.batch_size = batch_size
         self.dont_care_below = dont_care_below
         self.first_flush = True
-        self.stdout_log = os.path.join(self.tmp_dir, 'stdout.log')
-        self.stderr_log = os.path.join(self.tmp_dir, 'stderr.log')
+        self.stdout_log = os.path.join(self.tmp_dir, 'kmc_stdout.log')
+        self.stderr_log = os.path.join(self.tmp_dir, 'kmc_stderr.log')
         self.gb = gb
         self.threads = threads
         self.cache_from_dir = cache_from
@@ -114,19 +128,6 @@ class KMC3KmerCounter(object):
         self.finalized = self.cache_from_dir is not None
         logging.info('    Initialized KMC3 k-mer counter with k=%d, gb=%d, threads=%d and batch_size=%d' %
                      (self.r, self.gb, self.threads, self.batch_size))
-
-    def run(self, cmd):
-        logging.info(cmd)
-        ret = os.system(cmd + ' >%s 2>%s' % (self.stdout_log, self.stderr_log))
-        if ret != 0:
-            msg = ('Error running command "%s"\n' % cmd) + \
-                  ('Exitlevel: %d\n' % ret) + \
-                   'Output:\n' + \
-                   open(self.stdout_log, 'r').read() + '\n' + \
-                   'Error:\n' + \
-                   open(self.stderr_log, 'r').read() + '\n'
-            raise RuntimeError(msg)
-        return ret
 
     def __del__(self):
         self.tmp_fh.close()
@@ -165,16 +166,18 @@ class KMC3KmerCounter(object):
             raise RuntimeError('Cannot flush counter taken from cache')
         self.tmp_fh.close()
         logging.info('Counting batch of ~%d bytes' % self.buffered_bytes)
-        self.run('kmc -sm -m%d -t%d -k%d -ci1 -fm %s %s %s' %
-                 (self.gb, self.threads, self.r, self.batch_mfa, self.batch_db, self.working_dir))
+        run('kmc -sm -m%d -t%d -k%d -ci1 -fm %s %s %s' %
+            (self.gb, self.threads, self.r, self.batch_mfa, self.batch_db, self.working_dir),
+            self.stdout_log, self.stderr_log)
         if self.first_flush:
             self.first_flush = False
             os.system('mv %s.kmc_pre %s.kmc_pre' % (self.batch_db, self.combined_db))
             os.system('mv %s.kmc_suf %s.kmc_suf' % (self.batch_db, self.combined_db))
         else:
             assert self.batch_size >= 0
-            self.run('kmc_tools -t%d, simple %s %s union %s' %
-                     (self.threads, self.batch_db, self.combined_db, self.combined_tmp_db))
+            run('kmc_tools -t%d, simple %s %s union %s' %
+                (self.threads, self.batch_db, self.combined_db, self.combined_tmp_db),
+                self.stdout_log, self.stderr_log)
             os.system('mv %s.kmc_pre %s.kmc_pre' % (self.combined_tmp_db, self.combined_db))
             os.system('mv %s.kmc_suf %s.kmc_suf' % (self.combined_tmp_db, self.combined_db))
             os.remove('%s.kmc_pre' % self.batch_db)
@@ -194,8 +197,9 @@ class KMC3KmerCounter(object):
             if self.dont_care_below > 1:
                 os.system('mv %s.kmc_pre %s.kmc_pre' % (self.combined_db, self.combined_tmp_db))
                 os.system('mv %s.kmc_suf %s.kmc_suf' % (self.combined_db, self.combined_tmp_db))
-                self.run('kmc_tools -t%d transform %s reduce %s -ci%d' %
-                         (self.threads, self.combined_tmp_db, self.combined_db, self.dont_care_below))
+                run('kmc_tools -t%d transform %s reduce %s -ci%d' %
+                    (self.threads, self.combined_tmp_db, self.combined_db, self.dont_care_below),
+                    self.stdout_log, self.stderr_log)
                 os.remove('%s.kmc_pre' % self.combined_tmp_db)
                 os.remove('%s.kmc_suf' % self.combined_tmp_db)
             self.finalized = True
@@ -228,14 +232,17 @@ class KMC3KmerCounter(object):
                 st = b'>r\n%s\n' % query
                 fh.write(st)
         # Count k-mers (counting is redundant; we just want a set)
-        self.run('kmc -sm -m%d -t%d -k%d -ci1 -fm %s %s %s' %
-                 (self.gb, self.threads, self.r, self.query_mfa, self.batch_db, self.working_dir))
+        run('kmc -sm -m%d -t%d -k%d -ci1 -fm %s %s %s' %
+            (self.gb, self.threads, self.r, self.query_mfa, self.batch_db, self.working_dir),
+            self.stdout_log, self.stderr_log)
         os.remove(self.query_mfa)
         # Perform intersection with the big count file
-        self.run('kmc_tools -t%d simple %s %s intersect %s -ocleft' %
-                 (self.threads, self.combined_db, self.batch_db, self.query_counts_db))
+        run('kmc_tools -t%d simple %s %s intersect %s -ocleft' %
+            (self.threads, self.combined_db, self.batch_db, self.query_counts_db),
+            self.stdout_log, self.stderr_log)
         # Dump the intersection file
-        self.run('kmc_dump %s %s' % (self.query_counts_db, self.dump_fn))
+        run('kmc_dump %s %s' % (self.query_counts_db, self.dump_fn),
+            self.stdout_log, self.stderr_log)
         # Can remove query set now
         os.remove('%s.kmc_pre' % self.batch_db)
         os.remove('%s.kmc_suf' % self.batch_db)
@@ -250,7 +257,7 @@ class KMC3KmerCounter(object):
 
 class BounterKmerCounter(object):
 
-    def __init__(self,  name, r, size_mb=1024, log_counting=8):
+    def __init__(self,  name, r, size_mb=1024, log_counting=8, from_kmc=None, temp=None):
         if log_counting not in [None, 8, 1024]:
             raise ValueError('log_counting must be one of: None (for non-log), '
                              '8 (for 3-bit exact), 1024 (for 10-bit exact)')
@@ -269,6 +276,15 @@ class BounterKmerCounter(object):
         self.result_len = 1024
         self.results = malloc("int64_t[]", self.result_len)
         self.sketch = lib.bounter_new(self.width, self.depth)
+        self.tmp_dir = tempfile.mkdtemp(dir=temp)
+        self.dump_fn = os.path.join(self.tmp_dir, 'bounter_dump.tsv')
+        self.stdout_log = os.path.join(self.tmp_dir, 'bounter_stdout.log')
+        self.stderr_log = os.path.join(self.tmp_dir, 'bounter_stderr.log')
+        if from_kmc is not None:
+            run('kmc_dump %s %s' % (from_kmc, self.dump_fn), self.stdout_log, self.stderr_log)
+            assert isinstance(self.dump_fn, bytes)
+            lib.bounter_tsv_ingest(self.sketch, self.r, self.dump_fn)
+            os.remove(self.dump_fn)
 
     def close(self):
         lib.bounter_delete(self.sketch)
@@ -285,7 +301,7 @@ class BounterKmerCounter(object):
     def add(self, s):
         """ Add canonicalized version of each k-mer substring """
         assert isinstance(s, bytes)
-        lib.bounter_string_injest(self.sketch, self.r, s, len(s))
+        lib.bounter_string_ingest(self.sketch, self.r, s, len(s))
 
     def query(self, s):
         """ Query with each k-mer substring """

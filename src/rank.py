@@ -314,7 +314,7 @@ class VarRanker:
         self.count_kmers_added(cache_from=cache_from, cache_to=cache_to)
         self.avg_read_prob(cache_from=cache_from, cache_to=cache_to)
 
-    def rank_hybrid(self, threshold=0.5, query_batch_size=1000000):
+    def rank_hybrid(self, threshold=0.5, query_batch_size=1000000, size_mb=1024, log_counting=8):
         """
         `threshold` for blowup avoidance
         """
@@ -328,64 +328,25 @@ class VarRanker:
         bar = 100
         incr = 1.1
 
-        def process_batch(batch, vecs, idss, variants, var_wgts_chrom):
-            assert len(batch) == len(vecs)
-            query_ref = self.h_ref.query_batch(batch)
-            query_aug = self.h_added.query_batch(batch)
-            for c_ref, c_aug, pc, vec, ids in zip(query_ref, query_aug, batch, vecs, idss):
-                if c_ref == -1:
-                    assert c_aug == -1
-                    continue
-                assert c_ref >= 0
-                if c_aug == 0:
-                    c_aug = 1
-                p = self.prob_read(variants, ids, vec)
-                if hist_ref is not None:
-                    hist_ref.add(c_ref)
-                if hist_aug is not None:
-                    hist_aug.add(c_aug)
-                c_total = c_ref + c_aug
-
-                # Average relative probability of this read's other mappings
-                avg_wgt = c_ref * self.wgt_ref + (c_aug - 1) * self.wgt_added
-                hybrid_wgt = (p - avg_wgt) / (c_total)
-                for j in range(len(ids)):
-                    if vec[j]:
-                        var_wgts_chrom[ids[j]] -= hybrid_wgt
+        b_ref = kmer_counter.BounterKmerCounter(
+            'RefBounter', self.r, size_mb=size_mb, log_counting=log_counting,
+            from_kmc=self.h_ref.combined_db)
+        b_aug = kmer_counter.BounterKmerCounter(
+            'AugBounter', self.r, size_mb=size_mb, log_counting=log_counting,
+            from_kmc=self.h_added.combined_db)
 
         #hist_ref, hist_aug = Quantiler(), Quantiler()
         hist_ref, hist_aug = None, None
         for chrom, variants in self.variants.items():
             num_v = len(variants)
             var_wgts_chrom = [0] * num_v
-            batch, vecs, idss = [], [], []
             for v in range(num_v):
                 if num_v_cum + v >= bar:
                     bar = max(bar + 1, bar*incr)
                     msofar = (num_v_cum + v)
                     pct = msofar * 100.0 / self.num_v
                     logging.info('    %d out of %d variants; %0.3f%% done' % (msofar, self.num_v, pct))
-                pos = variants.poss[v]
-                r = self.r
-                k = 1
-                while v + k < num_v and variants.poss[v + k] < pos + r:
-                    k += 1
-                if k > self.max_v_in_window:
-                    alt_freqs = [(variants.sum_probs(v + j), v + j) for j in range(1, k)]
-                    ids = [v] + [f[1] for f in sorted(alt_freqs, reverse=True)[:self.max_v_in_window - 1]]
-                    ids = list(sorted(ids))
-                else:
-                    ids = list(range(v, v + k))
-                it = PseudocontigIterator(self.genome[chrom], variants, ids, r)
-                for pc in it:
-                    batch.append(pc)
-                    vecs.append(it.vec[:])
-                    idss.append(ids)
-                    if len(batch) >= query_batch_size:
-                        process_batch(batch, vecs, idss, variants, var_wgts_chrom)
-                        batch, vecs, idss = [], [], []
-            if len(batch) > 0:
-                process_batch(batch, vecs, idss, variants, var_wgts_chrom)
+                self.compute_hybrid(self.genome[chrom], variants, v, var_wgts_chrom, hist_ref, hist_aug, b_ref, b_aug)
             for v in range(num_v):
                 var_wgts.append([var_wgts_chrom[v], chrom, variants.poss[v]])
             num_v_cum += num_v
@@ -454,7 +415,7 @@ class VarRanker:
 
         return ordered, self.rank_dynamic_blowup(upper_tier, lower_tier)
 
-    def compute_hybrid(self, chrom_seq, variants, first_var, var_wgts, hist_ref, hist_aug):
+    def compute_hybrid(self, chrom_seq, variants, first_var, var_wgts, hist_ref, hist_aug, h_ref, h_added):
         pos = variants.poss[first_var]
         num_v = len(variants)
         r = self.r
@@ -474,47 +435,32 @@ class VarRanker:
         else:
             ids = list(range(first_var, first_var+k))
 
-        queries_per_batch = 10000
-        batch, vecs = [], []
         it = PseudocontigIterator(chrom_seq, variants, ids, r)
-        while True:
-            for pc in it:
-                batch.append(pc)
-                vecs.append(it.vec)
-                if len(batch) >= queries_per_batch:
-                    break
-            if len(batch) == 0:
-                break
-            assert len(batch) == len(vecs)
-            query_ref = self.h_ref.query_batch(batch)
-            query_aug = self.h_added.query_batch(batch)
-            for c_ref, c_aug, pc, vec in zip(query_ref, query_aug, batch, vecs):
+        for pc in it:
+            p = self.prob_read(variants, ids, it.vec)
+            c_refs = h_ref.query(pc)
+            c_augs = h_added.query(pc)
+            assert len(c_refs) == len(c_augs)
+            for c_ref, c_aug in zip(c_refs, c_augs):
                 if c_ref == -1:
                     assert c_aug == -1
                     continue
                 assert c_ref >= 0
-                assert c_aug >= 0
-                p = self.prob_read(variants, ids, vec)
+                if c_aug == 0:
+                    c_aug = 1  # we're querying only with augmented k-mers, so all have count of at least 1
                 if hist_ref is not None:
                     hist_ref.add(c_ref)
                 if hist_aug is not None:
                     hist_aug.add(c_aug)
-                if c_aug == 0:
-                    print('Error! Read %s from added pseudocontigs could not be found (SNPs %d - %d)' %
-                          (pc, first_var, first_var+k))
-                    for j in range(first_var, first_var+k):
-                        print('%s: %d, %s --> %s' % (self.variants[j].chrom, self.variants[j].pos,
-                                                     self.variants[j].orig, ','.join(self.variants[j].alts)))
-                    exit()
                 c_total = c_ref + c_aug
 
                 # Average relative probability of this read's other mappings
                 avg_wgt = c_ref * self.wgt_ref + (c_aug-1) * self.wgt_added
                 hybrid_wgt = (p - avg_wgt) / (c_total)
                 for j in range(len(ids)):
-                    if vec[j]:
+                    if it.vec[j]:
                         var_wgts[ids[j]] -= hybrid_wgt
-            batch, vecs = [], []
+
 
     def rank_pop_cov(self, with_blowup=False, threshold=0.5):
         if with_blowup:
