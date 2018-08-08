@@ -4,17 +4,13 @@ python:
 - '3.4'
 - '3.5'
 - '3.6'
-# PyPy versions
-- "pypy2.7"
-- "pypy3.5"
+- pypy3.5
 before_install:
 - sudo apt-get update
 install:
-- if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
-    wget https://repo.continuum.io/miniconda/Miniconda2-latest-Linux-x86_64.sh -O miniconda.sh;
-  else
-    wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh;
-  fi
+- if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then wget https://repo.continuum.io/miniconda/Miniconda2-latest-Linux-x86_64.sh
+  -O miniconda.sh; else wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh
+  -O miniconda.sh; fi
 - bash miniconda.sh -b -p $HOME/miniconda
 - export PATH="$HOME/miniconda/bin:$PATH"
 - hash -r
@@ -27,4 +23,4 @@ script:
 - "./unit_test.sh"
 notifications:
   slack:
-    secure: acBJ7SM1nqyrPqHB5y0AzoqBUERrEplP7on3s3BkNmhGkfU435qfQTlx/n9xFeY70/kgQhUii6ta1JEsxMK+sb2DgpOTI7Q7rAu34YEQFS5PH/kIBl6O8BD8SPomRXkMIM5NRT2yavoc363joxUKkYqJAlLu0ZDacsOF0TGTFrL9kJcnRJf+u5XJRKlw6YOPIqyoKJYZVhFDS30uq/og4H9lFUwhgn8wXoIU5vKq1Wn78U0OdrtHnKkRQPt2Ve7UKeiWyT6vIw1JyHaVBiBcn5bVvyXyiQNRnUtxhgqmESPvT4TkUO7IEatfQ1oqS4B0xvBMlf8KBWmvpnlitGuRB68fZIy1YVR9OYFt0/hoTTSW9sHQ+gRj5m5t/R+ppV+L//u0T/cm3hJh4Zs2J2tvn3/j107x15AFhbXp6ItzRDzHDSzQHmsYz2mdhxTQJPym3jIq89zlSsA5NHnQQGrOJeAbztnwIHff8HVEiSErpDCZpIo6+HJphnH0cM3ugWrDR6qIkyvg5fvDFgGh/2vYCNCloniugCjknJp58eeLFytOZ7a9Rz3FhKGTKmjN0NAM4dEr5sNkhE2i1i6JizB4qt+JM72n7lZcdFEGaLSWAtVdt2W1pNwomx9zI4OkgFzp3HA2lOKWXVoF0QKYeXwAPG8ytzCDvNXlf20utPQ2FLk=
+    secure: AZuRMFO1v16OhVdziC/BggoCyjTpe4ErcS4i5eHXhKh72RUC2tCdPIUNCnDybpKhmSrKXwPrMe0QoEUcuQYk/ftmI+Jyp1ttqaKizkNNAe1LJW4SVZQqpFpqUEPYqaPDxEoQrKTqJNsAE+pMrvnPnkmYHiiFHS8eGuSSgYVR/OdjeXiFL0C+hJMxwFTAbdWaakKVq1NOGXRP33HPRTDO7jGO83IiU0X8HoCNSQpIXV18TqgYv6V21OPhWMcGi4NnVVU+hF58IgTcDyXMHttndw4hIlrKrDD7BkBywVhkrcYn0UxgVXgsLBz0RTsOf70X3D/lOjn9GNFYI07Xgpj4MXOmWo2rPdQiVtGjs4TlHR6+dkTlS7IyM9eicAkqSC4P4CFZfMRDmcwaiGeXKtofuqYDSxJfuKxBP5i/spMyilI0VuCWyJJxTQBe7WWKeMNgtN60je6XQE6+J5SffIFPFdRzy+rMCSgiRal1Zxmar0ixgOufch7dUAJAHORrWrE2cj+m1afDt/3Osm4dC3SvPTttJ4Mk3iEDpI0V9KC7fapFSA9BS/Zj6WXrv6KLQzjsrkHrWRAu1ynrbSM/WKd3a+ValgTw+GzmkDkIPH9S+ZXIToPKglR+ie5JO/F7bVxsiJlUntZmRwDHX8jD7iaDEXNaNFYAf3zidFa7OJ7Nk9M=
