@@ -338,10 +338,10 @@ class VarRanker:
 
         b_ref = kmer_counter.BounterKmerCounter(
             'RefBounter', self.r, size_mb=size_mb, log_counting=log_counting,
-            from_kmc=self.h_ref.combined_db)
+            from_kmc=self.h_ref.combined_db, temp=self.temp)
         b_aug = kmer_counter.BounterKmerCounter(
             'AugBounter', self.r, size_mb=size_mb, log_counting=log_counting,
-            from_kmc=self.h_added.combined_db)
+            from_kmc=self.h_added.combined_db, temp=self.temp)
 
         #hist_ref, hist_aug = Quantiler(), Quantiler()
         hist_ref, hist_aug = None, None
