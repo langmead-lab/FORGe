@@ -599,8 +599,8 @@ def go(args):
     r = args.window_size or 35
     o = args.output or 'ordered.txt'
     max_v = args.prune or r
-    bulk_counter_type = args.counter or 'KMC3'
-    fast_counter_type = args.counter or 'Bounter'
+    bulk_counter_type = args.bulk_counter or 'KMC3'
+    fast_counter_type = 'Bounter'
 
     logging.info('Reading genome')
     genome = read_genome(args.reference, target_chrom=args.chrom)
