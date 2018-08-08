@@ -14,6 +14,11 @@ import random
 import tempfile
 from util import revcomp
 from collections import Counter
+from _api import ffi, lib
+
+
+# at module level
+malloc = ffi.new_allocator(should_clear_after_alloc=False)
 
 
 _non_acgt = re.compile(b'[^ACGTacgt]')
@@ -243,9 +248,66 @@ class KMC3KmerCounter(object):
                 yield x
 
 
+class BounterKmerCounter(object):
+
+    def __init__(self,  name, r, size_mb=1024, log_counting=8):
+        if log_counting not in [None, 8, 1024]:
+            raise ValueError('log_counting must be one of: None (for non-log), '
+                             '8 (for 3-bit exact), 1024 (for 10-bit exact)')
+        if log_counting != 8:
+            raise ValueError('Only 8-bit log counting supported for now')
+        if log_counting == 8:
+            self.cell_size = cell_size = 1
+        elif log_counting == 1024:
+            self.cell_size = cell_size = 2
+        else:
+            self.cell_size = cell_size = 4
+        self.width = 1 << (size_mb * (2 ** 20) // (cell_size * 8 * 2)).bit_length()
+        self.depth = (size_mb * (2 ** 20)) // (self.width * cell_size)
+        self.name = name
+        self.r = r
+        self.result_len = 1024
+        self.results = malloc("int64_t[]", self.result_len)
+        self.sketch = lib.bounter_new(self.width, self.depth)
+
+    def close(self):
+        lib.bounter_delete(self.sketch)
+
+    def flush(self):
+        pass  # nop
+
+    def finalize(self):
+        pass  # nop
+
+    def cache_to(self):
+        raise NotImplementedError('BounterKmerCounter.cache_to() not implemented')
+
+    def add(self, s):
+        """ Add canonicalized version of each k-mer substring """
+        assert isinstance(s, bytes)
+        lib.bounter_string_injest(self.sketch, self.r, s, len(s))
+
+    def query(self, s):
+        """ Query with each k-mer substring """
+        assert isinstance(s, bytes)
+        result_len = len(s)-self.r+1
+        if result_len > self.result_len:
+            del self.results
+            self.result_len = result_len
+            self.results = malloc("int64_t[]", self.result_len)
+        lib.bounter_string_query(self.sketch, self.r, s, len(s), self.results, result_len)
+        return list(self.results[0:result_len])
+
+    def query_batch(self, queries):
+        """ Query with each k-mer substring of each query string """
+        for query in queries:
+            for res in self.query(query):
+                yield res
+
+
 def pytest_generate_tests(metafunc):
     if 'counter_class' in metafunc.fixturenames:
-        counter_classes = [SimpleKmerCounter, KMC3KmerCounter]
+        counter_classes = [SimpleKmerCounter, KMC3KmerCounter, BounterKmerCounter]
         metafunc.parametrize("counter_class", counter_classes, indirect=True)
 
 
