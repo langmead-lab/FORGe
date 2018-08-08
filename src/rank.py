@@ -74,7 +74,7 @@ class VarRanker:
         if self.wgt_ref and self.wgt_added:
             return
 
-        if cache_from is not None:
+        if cache_from is not None and os.path.exists(os.path.join(cache_from, 'weights.csv')):
             fn = os.path.join(cache_from, 'weights.csv')
             logging.info('    retrieving from cache file "%s"' % fn)
             with open(fn, 'rb') as fh:
