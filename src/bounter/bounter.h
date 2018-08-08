@@ -13,7 +13,7 @@ extern void bounter_delete(void *sketch);
  * Given a string, extract every k-mer, canonicalize, and add to the bounter
  * sketch.
  */
-extern int bounter_string_injest(
+extern int bounter_string_ingest(
     void *sketch,            // bounter sketch
     int k,                   // k-mer length
     const char *read,        // string whose k-mers to add
@@ -22,7 +22,7 @@ extern int bounter_string_injest(
 /**
  * Given a file with k-mer / count pairs, add to the bounter sketch.
  */
-extern int bounter_tsv_injest(
+extern int bounter_tsv_ingest(
     void *sketch,           // bounter sketch
     int k,                  // k-mer length
     const char *filename);  // TSV filename

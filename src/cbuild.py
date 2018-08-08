@@ -27,7 +27,7 @@ ffibuilder.cdef("""
     void bounter_delete(
         void *sketch);
 
-    int bounter_string_injest(
+    int bounter_string_ingest(
         void *sketch,
         int k,
         const char *read,
@@ -40,6 +40,11 @@ ffibuilder.cdef("""
         size_t read_len,
         int64_t *count_array,
         size_t count_array_len);
+
+    int bounter_tsv_ingest(
+        void *sketch,
+        int k,
+        const char *filename);
 """)
 
 if __name__ == "__main__":

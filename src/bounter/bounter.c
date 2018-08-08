@@ -149,7 +149,7 @@ static b256 *b256_min(b256 *a, b256 *b) {
  * Given a string, extract every k-mer, canonicalize, and add to the bounter
  * sketch.
  */
-int bounter_string_injest(
+int bounter_string_ingest(
     CMS_Log8 *sketch,       // bounter sketch
     int k,                  // k-mer length
     const char *read,       // string whose k-mers to add
@@ -208,7 +208,7 @@ int bounter_string_injest(
 /**
  * Given a file with k-mer / count pairs, add to the bounter sketch.
  */
-int bounter_tsv_injest(
+int bounter_tsv_ingest(
     CMS_Log8 *sketch,       // bounter sketch
     int k,                  // k-mer length
     const char *filename)   // TSV filename
@@ -404,7 +404,7 @@ static void quick_tests(unsigned seed) {
         //                     TACG (2)
         for(int i = 0; i < 3; i++) {
             CMS_Log8_init(&sketch, 1024, 10);
-            int nadded = bounter_string_injest(&sketch, 4, text, i + 4);
+            int nadded = bounter_string_ingest(&sketch, 4, text, i + 4);
             assert(i+1 == nadded);
             bounter_string_query(&sketch, 4, text, i+4, results, i+1);
             for(int j = 0; j <= i; j++) {
@@ -413,7 +413,7 @@ static void quick_tests(unsigned seed) {
             CMS_Log8_dealloc(&sketch);
         }
         CMS_Log8_init(&sketch, 1024, 10);
-        bounter_string_injest(&sketch, 4, text, 7);
+        bounter_string_ingest(&sketch, 4, text, 7);
         bounter_string_query(&sketch, 4, text, 7, results, 4);
         assert(results[0] == 1);
         assert(results[1] == 2);
@@ -427,7 +427,7 @@ static void quick_tests(unsigned seed) {
         const char *query = "TCCCNGGGA";
         int64_t results[6];
         CMS_Log8_init(&sketch, 1024, 10);
-        bounter_string_injest(&sketch, 4, text, 12);
+        bounter_string_ingest(&sketch, 4, text, 12);
         bounter_string_query(&sketch, 4, query, 9, results, 6);
         assert(results[0] == 3);
         assert(results[5] == 3);
@@ -445,7 +445,7 @@ static void quick_tests(unsigned seed) {
             *cur++ = "ACGT"[rand() % 4];
         }
         text[textlen+ksize-1] = '\0';
-        bounter_string_injest(&sketch, 60, text, textlen + ksize - 1);
+        bounter_string_ingest(&sketch, 60, text, textlen + ksize - 1);
         CMS_Log8_dealloc(&sketch);
     }
 }
@@ -500,17 +500,17 @@ int main(int argc, char *argv[]) {
         if(strncmp(ref + reflen - 4, ".tsv", 4) == 0) {
             // TSV file
             fprintf(stderr, "Building reference from TSV file: \"%s\"\n", ref);
-            added = bounter_tsv_injest(&sketch, ksize, ref);
+            added = bounter_tsv_ingest(&sketch, ksize, ref);
         } else {
             // Normal file
             fprintf(stderr, "Building reference from regular file: \"%s\"\n", ref);
             char *text = fslurp(ref);
-            added = bounter_string_injest(&sketch, ksize, text, strlen(text));
+            added = bounter_string_ingest(&sketch, ksize, text, strlen(text));
             free(text);
         }
     } else {
         fprintf(stderr, "Building reference from string: \"%s\"\n", ref);
-        added = bounter_string_injest(&sketch, ksize, ref, strlen(ref));
+        added = bounter_string_ingest(&sketch, ksize, ref, strlen(ref));
     }
     fprintf(stderr, "  added %d k-mers\n", added);
 
