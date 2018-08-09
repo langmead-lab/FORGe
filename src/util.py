@@ -93,6 +93,7 @@ def vec_to_id(v, counts):
     that can be used as a concise key
     """
     ident = 0
+    assert len(v) == len(counts)
     for i in range(len(v)):
         if v[i] > counts[i]:
             msg = 'Error in allele vector! Vector is %s but counts are %d' % (str(v[i]), counts[i])
@@ -101,7 +102,7 @@ def vec_to_id(v, counts):
     return ident
 
 
-all_acgt_re = re.compile("^[ACGTacgt]*$")
+all_acgt_re = re.compile(b"^[ACGTacgt]*$")
 
 
 @implements_iterator
@@ -109,6 +110,7 @@ class PseudocontigIterator(object):
     """ Loop over all pseudocontigs that contain a certain set of variants """
 
     def __init__(self, chrom_seq, variants, ids, r):
+        assert isinstance(chrom_seq, bytes)
         self.seq = chrom_seq
         self.vars = variants
         self.ids = ids
@@ -192,85 +194,85 @@ def test_get_next_vector():
 
 
 def test_pc_iter_1():
-    seq = 'AAAAAAAAA'
+    seq = b'AAAAAAAAA'
     #      012345678
     #          T
 
     variants = VariantSet()
-    variants.add_var(4, 'A', 'T', 0.25)
+    variants.add_var(4, b'A', b'T', 0.25)
 
     pi = PseudocontigIterator(seq, variants, [0], 4)
     pcs = [x for x in pi]
     assert 1 == len(pcs)
-    assert 'AAATAAA' == pcs[0]
+    assert b'AAATAAA' == pcs[0]
 
     pi = PseudocontigIterator(seq, variants, [0], 5)
     pcs = [x for x in pi]
     assert 1 == len(pcs)
-    assert 'AAAATAAAA' == pcs[0]
+    assert b'AAAATAAAA' == pcs[0]
 
     pi = PseudocontigIterator(seq, variants, [0], 6)
     pcs = [x for x in pi]
     assert 1 == len(pcs)
-    assert 'AAAATAAAA' == pcs[0]
+    assert b'AAAATAAAA' == pcs[0]
 
     pi = PseudocontigIterator(seq, variants, [0], 9)
     pcs = [x for x in pi]
     assert 1 == len(pcs)
-    assert 'AAAATAAAA' == pcs[0]
+    assert b'AAAATAAAA' == pcs[0]
 
 
 def test_pc_iter_2():
-    seq = 'AAAAAAAAAA'
+    seq = b'AAAAAAAAAA'
     #      0123456789
     #          CG
 
     variants = VariantSet()
-    variants.add_var(4, 'A', 'C', 0.25)
-    variants.add_var(5, 'A', 'G', 0.25)
+    variants.add_var(4, b'A', b'C', 0.25)
+    variants.add_var(5, b'A', b'G', 0.25)
 
     pi = PseudocontigIterator(seq, variants, [0, 1], 4)
     pcs = [x for x in pi]
     assert 2 == len(pcs)
     pcs.sort()
-    assert 'AAACAAA' == pcs[0]
-    assert 'AACGAA' == pcs[1]
+    assert b'AAACAAA' == pcs[0]
+    assert b'AACGAA' == pcs[1]
 
     pi = PseudocontigIterator(seq, variants, [0, 1], 5)
     pcs = [x for x in pi]
     assert 2 == len(pcs)
     pcs.sort()
-    assert 'AAAACAAAA' == pcs[0]
-    assert 'AAACGAAA' == pcs[1]
+    assert b'AAAACAAAA' == pcs[0]
+    assert b'AAACGAAA' == pcs[1]
 
 
 def test_pc_iter_3():
-    seq = 'AAAAAAAAAAA'
+    seq = b'AAAAAAAAAAA'
     #      01234567890
     #          CGT
 
     variants = VariantSet()
-    variants.add_var(4, 'A', 'C', 0.25)
-    variants.add_var(5, 'A', 'G', 0.25)
-    variants.add_var(6, 'A', 'T', 0.25)
+    variants.add_var(4, b'A', b'C', 0.25)
+    variants.add_var(5, b'A', b'G', 0.25)
+    variants.add_var(6, b'A', b'T', 0.25)
 
     pi = PseudocontigIterator(seq, variants, [0, 1, 2], 4)
     pcs = [x for x in pi]
     assert 4 == len(pcs)
     pcs.sort()
-    assert 'AAACAAA' == pcs[0]
-    assert 'AACGAA' == pcs[1]
-    assert 'ACATA' == pcs[2]
-    assert 'ACGTA' == pcs[3]
+    assert b'AAACAAA' == pcs[0]
+    assert b'AACGAA' == pcs[1]
+    assert b'ACATA' == pcs[2]
+    assert b'ACGTA' == pcs[3]
 
 
 def test_pc_iter_4():
-    seq = 'AAANAAAAA'
+    seq = b'AAANAAAAA'
     #      012345678
     #          T
 
     variants = VariantSet()
-    variants.add_var(4, 'A', 'T', 0.25)
+    variants.add_var(4, b'A', b'T', 0.25)
 
     pi = PseudocontigIterator(seq, variants, [0], 4)
     pcs = [x for x in pi]

@@ -272,7 +272,8 @@ class BounterKmerCounter(object):
             self.cell_size = cell_size = 2
         else:
             self.cell_size = cell_size = 4
-        self.width = 1 << (size_mb * (2 ** 20) // (cell_size * 8 * 2)).bit_length()
+        size_mb = int(size_mb)
+        self.width = int(1 << (size_mb * (2 ** 20) // (cell_size * 8 * 2))).bit_length()
         self.depth = (size_mb * (2 ** 20)) // (self.width * cell_size)
         self.name = name
         self.r = r
@@ -285,8 +286,7 @@ class BounterKmerCounter(object):
         self.stderr_log = os.path.join(self.tmp_dir, 'bounter_stderr.log')
         if from_kmc is not None:
             run('kmc_dump %s %s' % (from_kmc, self.dump_fn), self.stdout_log, self.stderr_log)
-            assert isinstance(self.dump_fn, bytes)
-            lib.bounter_tsv_ingest(self.sketch, self.r, self.dump_fn)
+            lib.bounter_tsv_ingest(self.sketch, self.r, self.dump_fn.encode())
             os.remove(self.dump_fn)
 
     def close(self):

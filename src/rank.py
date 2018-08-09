@@ -12,6 +12,7 @@ import kmer_counter
 import sys
 from operator import itemgetter
 from util import PseudocontigIterator, vec_to_id, get_next_vector
+from multiprocessing.pool import ThreadPool
 import re
 import os
 
@@ -36,13 +37,12 @@ class VarRanker:
         self.max_v_in_window = max_v
         self.h_ref = self.h_added = None
         self.wgt_ref = self.wgt_added = None
-        self.curr_vars = None
         self.freqs = {}
         self.bulk_counter_type = bulk_counter_type
         self.fast_counter_type = fast_counter_type
         self.temp = temp
 
-    def counter_maker(self, name, bulk=True, dont_care_below=1, cache_from=None, cache_to=None):
+    def counter_maker(self, name, bulk=True, dont_care_below=1, cache_from=None, cache_to=None, n_threads=1):
         counter_type = self.bulk_counter_type if bulk else self.fast_counter_type
         toks = counter_type.split(',')
         if counter_type == 'Simple':
@@ -52,11 +52,10 @@ class VarRanker:
                                                   cache_from=cache_from,
                                                   cache_to=cache_to)
         elif counter_type.startswith('KMC3'):
-            threads = int(toks[1]) if len(toks) > 1 else 0
-            gb = int(toks[2]) if len(toks) > 2 else 4
-            batch_sz = int(toks[3]) if len(toks) > 3 else -1
+            gb = int(toks[1]) if len(toks) > 2 else 4
+            batch_sz = int(toks[2]) if len(toks) > 3 else -1
             return kmer_counter.KMC3KmerCounter(name, self.r,
-                                                threads=threads, gb=gb,
+                                                threads=n_threads, gb=gb,
                                                 batch_size=batch_sz,
                                                 dont_care_below=dont_care_below,
                                                 temp=self.temp,
@@ -78,7 +77,7 @@ class VarRanker:
             fn = os.path.join(cache_from, 'weights.csv')
             logging.info('    retrieving from cache file "%s"' % fn)
             with open(fn, 'rb') as fh:
-                toks = fh.read().strip().split(',')
+                toks = fh.read().strip().split(b',')
                 self.wgt_ref = float(toks[0])
                 self.wgt_added = float(toks[1])
         else:
@@ -93,14 +92,15 @@ class VarRanker:
 
             r = self.r
 
-            all_acgt_re = re.compile("^[ACGTacgt]*$")
+            all_acgt_re = re.compile(b"^[ACGTacgt]*$")
+            cur_count, cur_vars = [None], [None]
 
             last_i, last_j, last_pref, last_added = -1, -1, -1, -1
             for chrom, seq in self.genome.items():
                 variants = self.variants[chrom]
                 num_v = len(variants)
                 var_i = 0
-                logging.info('    Processing chrom %s' % chrom)
+                logging.info('    Processing chrom %s' % chrom.decode())
                 num_reads = self.chrom_lens[chrom] - r + 1
                 count_ref += num_reads
                 for i in range(num_reads):
@@ -163,7 +163,7 @@ class VarRanker:
                             last_added *= (variants.num_alts(c) + 1)
                         count_added += last_added-1
 
-                        p_ref = self.prob_read_ref(variants, range(var_i, var_j))
+                        p_ref = self.prob_read_ref(variants, range(var_i, var_j), cur_vars, cur_count)
                         p_alts = 1 - p_ref
                     total_prob_ref += p_ref
                     total_prob_added += p_alts
@@ -196,6 +196,7 @@ class VarRanker:
 
         n_pcs, tot_pc_len = 0, 0
         for chrom in self.genome.values():
+            assert isinstance(chrom, bytes)
             self.h_ref.add(chrom)
             n_pcs += 1
             tot_pc_len += len(chrom)
@@ -244,25 +245,27 @@ class VarRanker:
                         bar = max(bar+1, int(bar*incr))
                         logging.info('    %d contigs, %d vars; max vars=%d; %0.3f%% done' %
                                      (n_pcs, n_vars, max_vars, 100.0*float(n_vars)/self.num_v))
+                    assert isinstance(pc, bytes)
                     self.h_added.add(pc)
         self.h_added.finalize()
 
-    def prob_read(self, variants, var_ids, vec):
+    def prob_read(self, variants, var_ids, vec, cur_vars, cur_count):
         """
         Probability that a read contains the allele vector vec
         Simultaneously computes probabilities for all haplotypes of the given variants to save time
         """
-        if not self.curr_vars or not (self.curr_vars == var_ids):
-            self.curr_vars = var_ids
+        assert len(var_ids) == len(vec)
+        if cur_vars[0] is None or not (cur_vars[0] == var_ids):
+            cur_vars[0] = var_ids
             num_v = len(var_ids)
-            self.counts = counts = [variants.num_alts(v) for v in var_ids]
+            cur_count[0] = [variants.num_alts(v) for v in var_ids]
             if self.hap_parser is not None:
                 # Initialize freqs based on population haplotype data
-                self.freqs = self.hap_parser.get_freqs(var_ids, counts)
+                self.freqs = self.hap_parser.get_freqs(var_ids, cur_count[0])
             else:
                 # Inititalize freqs based on independently-assumed allele frequencies
                 num_vecs = 1
-                for c in counts:
+                for c in cur_count[0]:
                     num_vecs *= (c+1)
                 vtmp = [0] * num_v
                 done = False
@@ -273,21 +276,20 @@ class VarRanker:
                             p *= variants.get_prob(var_ids[i], vtmp[i]-1)
                         else:
                             p *= (1 - variants.sum_probs(var_ids[i]))
-                    self.freqs[vec_to_id(vtmp, counts)] = p
-                    vtmp, done = get_next_vector(num_v, counts, vtmp)
+                    self.freqs[vec_to_id(vtmp, cur_count[0])] = p
+                    vtmp, done = get_next_vector(num_v, cur_count[0], vtmp)
 
-        f = self.freqs[vec_to_id(vec, self.counts)]
-        return f
+        return self.freqs[vec_to_id(vec, cur_count[0])]
 
-    def prob_read_ref(self, variants, var_ids):
+    def prob_read_ref(self, variants, var_ids, cur_vars, cur_count):
         """
         Probability that a read is from the reference genome, plus-one smoothed
         Faster than prob_read() when other haplotype probs are unneeded
         """
         if self.hap_parser is not None:
-            self.curr_vars = var_ids
-            self.counts = [variants[v].num_alts for v in var_ids]
-            return self.hap_parser.get_ref_freq(var_ids, self.counts)
+            cur_vars[0] = var_ids
+            cur_count[0] = [variants[v].num_alts for v in var_ids]
+            return self.hap_parser.get_ref_freq(var_ids, cur_count[0])
         else:
             p = 1
             for vi in var_ids:
@@ -295,7 +297,8 @@ class VarRanker:
             return p
 
     def rank(self, method, out_file, bounter_size_mb=1024*1024,
-             bounter_log_counting=8, cache_from=None, cache_to=None):
+             bounter_log_counting=8, cache_from=None, cache_to=None,
+             n_threads=1):
         ordered_blowup = None
         if method == 'popcov':
             ordered = self.rank_pop_cov()
@@ -304,17 +307,18 @@ class VarRanker:
         elif method == 'hybrid':
             self.count_kmers(cache_from=cache_from, cache_to=cache_to)
             ordered, ordered_blowup = self.rank_hybrid(size_mb=bounter_size_mb,
-                                                       log_counting=bounter_log_counting)
+                                                       log_counting=bounter_log_counting,
+                                                       n_threads=n_threads)
         else:
             raise RuntimeError('Bad ordering method: "%s"' % method)
 
         if ordered:
-            with open(out_file, 'w') as f:
-                f.write('\t'.join([tup[0] + ',' + str(tup[1] + 1) for tup in ordered]))
+            with open(out_file, 'wb') as f:
+                f.write(b'\t'.join(str(tup[0]).encode() + b',' + str(tup[1] + 1).encode() for tup in ordered))
 
         if ordered_blowup:
-            with open(out_file + '.blowup', 'w') as f:
-                f.write('\t'.join([tup[0] + ',' + str(tup[1] + 1) for tup in ordered_blowup]))
+            with open(out_file + '.blowup', 'wb') as f:
+                f.write(b'\t'.join(str(tup[0]).encode() + b',' + str(tup[1] + 1).encode() for tup in ordered_blowup))
 
     def count_kmers(self, cache_from=None, cache_to=None):
         logging.info('  Counting k-mers')
@@ -322,7 +326,7 @@ class VarRanker:
         self.count_kmers_added(cache_from=cache_from, cache_to=cache_to)
         self.avg_read_prob(cache_from=cache_from, cache_to=cache_to)
 
-    def rank_hybrid(self, threshold=0.5, size_mb=1024, log_counting=8):
+    def rank_hybrid(self, threshold=0.5, size_mb=1024, log_counting=8, n_threads=1):
         """
         `threshold` for blowup avoidance
         """
@@ -331,9 +335,6 @@ class VarRanker:
         if self.hap_parser is not None:
             self.hap_parser.reset_chunk()
 
-        var_wgts = []
-        num_v = num_v_cum = 0
-        bar = 100
         incr = 1.1
 
         b_ref = kmer_counter.BounterKmerCounter(
@@ -343,27 +344,32 @@ class VarRanker:
             'AugBounter', self.r, size_mb=size_mb, log_counting=log_counting,
             from_kmc=self.h_added.combined_db, temp=self.temp)
 
-        #hist_ref, hist_aug = Quantiler(), Quantiler()
-        hist_ref, hist_aug = None, None
-        for chrom, variants in self.variants.items():
+        def handle_ref(tup):
+            chrom, thread_id = tup
+            variants = self.variants[chrom]
             num_v = len(variants)
+            assert num_v == len(variants.poss)
             var_wgts_chrom = [0] * num_v
+            bar = 100
             for v in range(num_v):
-                if num_v_cum + v >= bar:
+                if v >= bar:
                     bar = max(bar + 1, bar*incr)
-                    msofar = (num_v_cum + v)
-                    pct = msofar * 100.0 / self.num_v
-                    logging.info('    %d out of %d variants; %0.3f%% done' % (msofar, self.num_v, pct))
-                self.compute_hybrid(self.genome[chrom], variants, v, var_wgts_chrom, hist_ref, hist_aug, b_ref, b_aug)
-            for v in range(num_v):
-                var_wgts.append([var_wgts_chrom[v], chrom, variants.poss[v]])
-            num_v_cum += num_v
-            assert len(var_wgts) == num_v_cum
+                    pct = v * 100.0 / num_v
+                    thread_str = '' if thread_id == 0 else ('Task %d: ' % thread_id)
+                    logging.info('    %s%d out of %d variants; %0.3f%% done' %
+                                 (thread_str, v, num_v, pct))
+                self.compute_hybrid(self.genome[chrom], variants, v, var_wgts_chrom, None, None, b_ref, b_aug)
+            return [[var_wgts_chrom[v], chrom, variants.poss[v]] for v in range(num_v)]
 
-        #logging.info('Ref quantiles: ' + str(hist_ref))
-        #logging.info('Aug quantiles: ' + str(hist_aug))
+        pool = ThreadPool(processes=n_threads)
+        if n_threads > 1:
+            results = pool.map(handle_ref,
+                               ((chrom, i+1) for i, chrom in enumerate(self.variants.keys())))
+        else:
+            results = [handle_ref((chrom, 0)) for chrom in self.variants.keys()]
 
-        assert num_v == self.num_v == len(var_wgts)
+        var_wgts = [ item for sublist in results for item in sublist ]
+        assert self.num_v == len(var_wgts)
 
         # Uncomment the following 2 lines to write SNP hybrid scores to an
         # intermediate file
@@ -399,14 +405,15 @@ class VarRanker:
         logging.info('    Blowup re-ranking')
         num_v = 0
         for chrom, variants in self.variants.items():
-            for i in range(len(variants)):
+            nvar = len(variants)
+            for i in range(nvar):
                 # var_wgts has to stay in order relative to self.variants
                 # until at least here
                 wgt = var_wgts[i+num_v][0]
                 first = last = i
                 while first > 0 and (variants.poss[i] - variants.poss[first-1]) < self.r:
                     first -= 1
-                while last < (self.num_v-1) and (variants.poss[last+1] - variants.poss[i]) < self.r:
+                while last < (nvar-1) and (variants.poss[last+1] - variants.poss[i]) < self.r:
                     last += 1
                 neighbors = last - first
                 assert -0.01 <= wgt <= 1.01
@@ -414,7 +421,9 @@ class VarRanker:
                     upper_tier.append((wgt, neighbors, chrom, i))
                 else:
                     lower_tier.append((wgt, neighbors, chrom, i))
-            num_v += len(variants)
+            num_v += nvar
+
+        assert num_v == self.num_v
 
         if len(upper_tier) == 0:
             logging.warning('  Upper tier empty')
@@ -443,9 +452,11 @@ class VarRanker:
         else:
             ids = list(range(first_var, first_var+k))
 
+        cur_count = [None]
+        cur_vars = [None]
         it = PseudocontigIterator(chrom_seq, variants, ids, r)
         for pc in it:
-            p = self.prob_read(variants, ids, it.vec)
+            p = self.prob_read(variants, ids, it.vec, cur_vars, cur_count)
             c_refs = h_ref.query(pc)
             c_augs = h_added.query(pc)
             assert len(c_refs) == len(c_augs)
@@ -457,8 +468,10 @@ class VarRanker:
                 if c_aug == 0:
                     c_aug = 1  # we're querying only with augmented k-mers, so all have count of at least 1
                 if hist_ref is not None:
+                    assert isinstance(c_ref, bytes)
                     hist_ref.add(c_ref)
                 if hist_aug is not None:
+                    assert isinstance(c_aug, bytes)
                     hist_aug.add(c_aug)
                 c_total = c_ref + c_aug
 
@@ -619,7 +632,8 @@ def go(args):
                 os.makedirs(args.cache_to)
         ranker.rank(args.method, o, cache_from=args.cache_from,
                     cache_to=args.cache_to,
-                    bounter_size_mb=int(args.fast_counter_mb)/2)
+                    bounter_size_mb=int(args.fast_counter_mb)/2,
+                    n_threads=args.threads)
 
 
 if __name__ == '__main__':
@@ -654,6 +668,9 @@ if __name__ == '__main__':
     parser.add_argument('--query-batch', type=int, default=100000000, metavar='<int>',
         help='Number of queries to batch when querying k-mer counts; '
              'default: 100000000')
+    parser.add_argument('--threads', type=int, default=1, metavar='<int>',
+        help='Number of simultaneous threads to use for parallel portions, '
+             'including KMC k-mer counting and hybrid scoring; default: 1')
     parser.add_argument('--pseudocontigs', action="store_true",
         help=argparse.SUPPRESS) # help='Rank pseudocontigs rather than SNPs')
     parser.add_argument('--phasing', type=str, required=False, metavar='<path>',
@@ -667,15 +684,14 @@ if __name__ == '__main__':
     parser.add_argument('--bulk-counter', type=str, required=False, default='KMC3',
         help='Counter data structure for bulk-counting k-mers in the reference '
              'and augmented genomes in --method hybrid mode; options are: "Simple"; '
-             '"KMC3,<threads>,<gb>,<batch_size>"; '
-             '"Bounter,<size_mb>,<log_counting>"')
+             '"KMC3,<gb>,<batch_size>"; "Bounter,<size_mb>,<log_counting>"')
     parser.add_argument('--fast-counter-mb', type=int, required=False, default=1024,
         help='Total MB allocated to the fast k-mer counters used to score '
              'variants in --method hybrid mode.')
     #parser.add_argument('--fast-counter', type=str, required=False, default='KMC3',
     #    help='Counter data structure for calculating variant scores in '
     #         '--method hybrid mode ; options are: "Simple"; '
-    #         '"KMC3,<threads>,<gb>,<batch_size>"; '
+    #         '"KMC3,<gb>,<batch_size>"; '
     #         '"Bounter,<size_mb>,<log_counting>"')
     parser.add_argument('--prune', type=int, required=False,
         help='In each window, prune haplotypes by only processing up to '
