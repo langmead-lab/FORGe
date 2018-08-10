@@ -48,7 +48,7 @@ CMS_VARIANT(_dealloc)(CMS_TYPE* self)
 #endif
 }
 
-static inline uint32_t rand_32b()
+static inline uint32_t rand_32b(void)
 {
     uint32_t r = rand();
 #if RAND_MAX < 0x8000
