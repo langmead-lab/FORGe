@@ -50,8 +50,8 @@ class VarRanker:
                                                   cache_from=cache_from,
                                                   cache_to=cache_to)
         elif toks[0] == 'KMC3':
-            gb = int(toks[1]) if len(toks) > 2 else 4
-            batch_sz = int(toks[2]) if len(toks) > 3 else -1
+            gb = int(toks[1]) if len(toks) > 1 else 4
+            batch_sz = int(toks[2]) if len(toks) > 2 else -1
             return kmer_counter.KMC3KmerCounter(name, self.r,
                                                 threads=threads, gb=gb,
                                                 batch_size=batch_sz,
