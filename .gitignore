@@ -7,3 +7,5 @@
 */*.aux
 */*.pbs
 __pycache__/
+.idea
+.pytest_cache
