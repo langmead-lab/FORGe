@@ -29,8 +29,8 @@ class VariantSet:
         return len(self.poss)
 
     def add_var(self, pos, orig, alt, prob):
-        alt = intern(alt)
-        orig = intern(orig)
+        #alt = intern(alt)
+        #orig = intern(orig)
         new_id = len(self.poss)
         assert orig != alt
         assert prob <= 1.01
@@ -51,7 +51,7 @@ class VariantSet:
         return ('%d %s ' % (self.poss[var_id], self.origs[var_id])) + ' '.join(alt_strs)
 
     def add_alt_to_last(self, alt, prob):
-        alt = intern(alt)
+        #alt = intern(alt)
         if len(self.poss) == 0:
             raise RuntimeError('No variants in set')
         if self.altrests[-1] is None:

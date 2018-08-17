@@ -13,14 +13,16 @@ def read_genome(filename, target_chrom=None):
     G = dict()
     seq = []
     skip = False
+    chrom = None
 
-    with open(filename, 'r') as f:
+    with open(filename, 'rb') as f:
         for line in f:
             # Skip header line
-            if line[0] == '>':
+            if line.startswith(b'>'):
                 if not skip and len(seq) > 0:
-                    G[chrom] = ''.join(seq)
-                chrom = line.rstrip().split(' ')[0][1:]
+                    assert chrom is not None
+                    G[chrom] = b''.join(seq)
+                chrom = line.rstrip().split(b' ')[0][1:]
                 seq = []
                 if target_chrom and not chrom == target_chrom:
                     skip = True
@@ -31,7 +33,7 @@ def read_genome(filename, target_chrom=None):
             if not skip:
                 seq.append(line.rstrip())
     if not skip and len(seq) > 0:
-        G[chrom] = ''.join(seq)
+        G[chrom] = b''.join(seq)
 
     return G
 
@@ -48,14 +50,14 @@ def parse_1ksnp(filename, G=None, target_chrom=None):
     vardict = defaultdict(variant.VariantSet)
 
     if target_chrom is not None:
-        target_chrom += '\t'
+        target_chrom += b'\t'
 
     n_var, n_target, n_nontarget = 0, 0, 0
     curr_name, curr_chr = None, None
     curr_nalt = 0
     wrong_count = 0
 
-    with open(filename, 'r') as f:
+    with open(filename, 'rb') as f:
         for line in f:
             if target_chrom is not None:
                 if not line.startswith(target_chrom):
@@ -63,11 +65,11 @@ def parse_1ksnp(filename, G=None, target_chrom=None):
                     continue
                 else:
                     n_target += 1
-            row = line.split('\t')
+            row = line.split(b'\t')
 
             if curr_nalt == 0:
                 if curr_chr is not None and row[0] != curr_chr:
-                    logging.info('  Starting chromosome %s; %d variants so far' % (curr_chr, n_var))
+                    logging.info('  Starting chromosome %s; %d variants so far' % (curr_chr.decode(), n_var))
                 curr_pos = int(row[1])-1
                 curr_orig = row[2]
                 curr_chr = row[0]
