@@ -168,6 +168,7 @@ class PseudocontigIterator(object):
             if start_offset < 0:
                 pos = variants.poss[ids[0]]
                 assert pos >= 0
+                # TODO: consider case where ambiguous character (e.g. N) comes before
                 prefix = self.seq[max(pos+start_offset, 0):pos]
                 read = prefix + read
             else:
@@ -248,8 +249,8 @@ def test_pc_iter_2():
 
 def test_pc_iter_3():
     seq = b'AAAAAAAAAAA'
-    #      01234567890
-    #          CGT
+    #       01234567890
+    #           CGT
 
     variants = VariantSet()
     variants.add_var(4, b'A', b'C', 0.25)
@@ -268,15 +269,72 @@ def test_pc_iter_3():
 
 def test_pc_iter_4():
     seq = b'AAANAAAAA'
-    #      012345678
-    #          T
+    #       012345678
+    #           T
 
     variants = VariantSet()
     variants.add_var(4, b'A', b'T', 0.25)
 
+    pcs = list(PseudocontigIterator(seq, variants, [0], 4))
+    assert 0 == len(pcs)
+
+
+def test_pc_iter_deletion_1():
+    seq = b'AAAAAAAAA'
+    #       012345678
+    #           a
+
+    variants = VariantSet()
+    variants.add_var(4, b'A', b'', 0.25)
+
     pi = PseudocontigIterator(seq, variants, [0], 4)
     pcs = [x for x in pi]
-    assert 0 == len(pcs)
+    assert 1 == len(pcs)
+    assert b'AAAAAAAA' == pcs[0]
+
+
+def test_pc_iter_deletion_2():
+    seq = b'AAAAAAAAA'
+    #       012345678
+    #          xxx
+
+    variants = VariantSet()
+    variants.add_var(3, b'AAA', b'', 0.25)
+
+    pi = PseudocontigIterator(seq, variants, [0], 4)
+    pcs = [x for x in pi]
+    assert 1 == len(pcs)
+    assert b'AAAAAA' == pcs[0]
+
+
+def test_pc_iter_insertion_1():
+    seq = b'AAAAAAAAA'
+    #       012345678
+    #           ^
+    #           TT
+
+    variants = VariantSet()
+    variants.add_var(4, b'A', b'TT', 0.25)
+
+    pi = PseudocontigIterator(seq, variants, [0], 4)
+    pcs = [x for x in pi]
+    assert 1 == len(pcs)
+    assert b'AATTAA' == pcs[0]
+
+
+def test_pc_iter_insertion_2():
+    seq = b'AAAAAAAAA'
+    #       012345678
+    #           ^
+    #           TT
+
+    variants = VariantSet()
+    variants.add_var(4, b'', b'TT', 0.25)
+
+    pi = PseudocontigIterator(seq, variants, [0], 4)
+    pcs = [x for x in pi]
+    assert 1 == len(pcs)
+    assert b'AATTAA' == pcs[0]
 
 
 def test_quantiler_1():
