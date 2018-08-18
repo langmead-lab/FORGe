@@ -2,6 +2,10 @@
 Utility functions
 '''
 
+
+from variant import Variant
+
+
 def get_next_vector(k, counts, v=None):
     '''
     Loop through all allele vectors in order
@@ -22,6 +26,7 @@ def get_next_vector(k, counts, v=None):
         v[j] += 1
         return v
 
+
 def vec_to_id(v, counts):
     id = 0
     for i in range(len(v)):
@@ -33,6 +38,7 @@ def vec_to_id(v, counts):
         id = id * (counts[i]+1) + v[i]
 
     return id
+
 
 class PseudocontigIterator:
     ''' Loop over all pseudocontigs that contain a certain set of variants '''
@@ -169,4 +175,175 @@ class ReadIterator:
             self.curr_vars = vars[self.first_var:self.last_var]
             self.vec = [0] * (self.last_var - self.first_var)
 
-            
+
+def test_pc_iter_1():
+    seq = 'AAAAAAAAA'
+    #      012345678
+    #          T
+
+    variants = [Variant('t', 't', 4, 'A', 'T', 0.25)]
+
+    it = PseudocontigIterator(seq, variants, 4)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 1 == len(pcs)
+    assert 'AAATAAA' == pcs[0]
+
+    it = PseudocontigIterator(seq, variants, 5)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 1 == len(pcs)
+    assert 'AAAATAAAA' == pcs[0]
+
+    it = PseudocontigIterator(seq, variants, 6)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 1 == len(pcs)
+    assert 'AAAATAAAA' == pcs[0]
+
+    it = PseudocontigIterator(seq, variants, 9)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 1 == len(pcs)
+    assert 'AAAATAAAA' == pcs[0]
+
+
+def test_pc_iter_2():
+    seq = 'AAAAAAAAAA'
+    #      0123456789
+    #          CG
+
+    variants = [Variant('t', 't', 4, 'A', 'C', 0.25),
+                Variant('t', 't', 5, 'A', 'G', 0.25)]
+    it = PseudocontigIterator(seq, variants, 4)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 2 == len(pcs)
+    assert 'AAACAAA' in pcs
+    assert 'AACGAA' in pcs
+
+    it = PseudocontigIterator(seq, variants, 5)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 2 == len(pcs)
+    assert 'AAAACAAAA' in pcs
+    assert 'AAACGAAA' in pcs
+
+
+def test_pc_iter_3():
+    seq = 'AAAAAAAAAAA'
+    #      01234567890
+    #          CGT
+
+    variants = [Variant('t', 't', 4, 'A', 'C', 0.25),
+                Variant('t', 't', 5, 'A', 'G', 0.25),
+                Variant('t', 't', 6, 'A', 'T', 0.25)]
+    it = PseudocontigIterator(seq, variants, 4)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 'AAACAAA' in pcs
+    assert 'AACGAA' in pcs
+    assert 'ACATA' in pcs
+    assert 'ACGTA' in pcs
+
+
+def test_pc_iter_4():
+    seq = 'AAANAAAAA'
+    #      012345678
+    #          T
+
+    variants = [Variant('t', 't', 4, 'A', 'T', 0.25)]
+    it = PseudocontigIterator(seq, variants, 4)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 0 == len(pcs)
+
+
+def test_pc_iter_deletion_1():
+    seq = 'AAAAAAAAA'
+    #      012345678
+    #          a
+
+    variants = [Variant('t', 't', 4, 'A', [''], 0.25)]
+    it = PseudocontigIterator(seq, variants, 4)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 1 == len(pcs)
+    assert 'AAAAAAAA' == pcs[0]
+
+
+def test_pc_iter_deletion_2():
+    seq = 'AAAAAAAAA'
+    #      012345678
+    #         xxx
+
+    variants = [Variant('t', 't', 3, 'AAA', [''], 0.25)]
+    it = PseudocontigIterator(seq, variants, 4)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 1 == len(pcs)
+    assert 'AAAAAA' == pcs[0]
+
+
+def test_pc_iter_insertion_1():
+    seq = 'AAAAAAAAA'
+    #      012345678
+    #          ^
+    #          TT
+
+    variants = [Variant('t', 't', 4, 'A', ['TT'], 0.25)]
+    it = PseudocontigIterator(seq, variants, 4)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 1 == len(pcs)
+    assert 'AATTAA' == pcs[0]
+
+
+def test_pc_iter_insertion_2():
+    seq = 'AAAAAAAAA'
+    #      012345678
+    #          ^
+    #          TT
+
+    variants = [Variant('t', 't', 4, '', ['TT'], 0.25)]
+    it = PseudocontigIterator(seq, variants, 4)
+    pc = it.next()
+    pcs = []
+    while pc:
+        pcs.append(pc)
+        pc = it.next()
+    assert 1 == len(pcs)
+    assert 'AATTAA' == pcs[0]
