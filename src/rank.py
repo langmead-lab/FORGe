@@ -22,15 +22,14 @@ VERSION = '0.0.4'
 
 class VarRanker:
 
-    def __init__(self, genome, variants, r, phasing, max_v, counter_type, temp):
+    def __init__(self, reference, variant_fn, r, phasing, max_v, counter_type, temp, target_chrom=None):
         logging.info('Creating ranker')
-        self.genome = genome
-        self.chrom_lens = dict()
-        for chrom, seq in genome.items():
-            self.chrom_lens[chrom] = len(seq)
-        self.variants = variants
-        self.num_v = sum(map(len, variants.values()))
+        self.genome = self.variants = None
+        self.reference = reference
+        self.target_chrom = target_chrom
+        self.variant_fn = variant_fn
         self.r = r
+        self.genome_names = None
         self.phasing = phasing
         self.hap_parser = HaplotypeParser(phasing) if phasing else None
         self.max_v_in_window = max_v
@@ -39,6 +38,34 @@ class VarRanker:
         self.freqs = {}
         self.counter_type = counter_type
         self.temp = temp
+        self.num_variants = None
+
+    def load_sequence(self, target_chrom=None):
+        logging.info('Reading genome')
+        if target_chrom is None:
+            target_chrom = self.target_chrom
+        self.genome = read_genome(self.reference,
+                                  target_chrom=target_chrom)
+        self.genome_names = set(self.genome.keys())
+
+        logging.info('Parsing 1ksnp')
+        self.variants = parse_1ksnp(self.variant_fn, G=self.genome,
+                                    target_chrom=target_chrom)
+        self.num_variants = sum(map(len, self.variants.values()))
+
+    def unload_sequence(self):
+        if self.variants is not None:
+            logging.info('Unloading variants')
+            del self.variants
+            self.variants = None
+
+        if self.genome is not None:
+            logging.info('Unloading genome sequence')
+            del self.genome
+            self.genome = None
+
+    def sequence_loaded(self):
+        return self.variants is not None
 
     def counter_maker(self, name, dont_care_below=1,
                       cache_from=None, cache_to=None, threads=1):
@@ -63,6 +90,10 @@ class VarRanker:
             raise ValueError('Bad counter type: ' + self.counter_type)
 
     def avg_read_prob(self, cache_from=None, cache_to=None):
+
+        if not self.sequence_loaded():
+            self.load_sequence(self.target_chrom)
+
         logging.info('  Calculating average read probabilities')
         if self.wgt_ref and self.wgt_added:
             return
@@ -95,7 +126,7 @@ class VarRanker:
                 num_v = len(variants)
                 var_i = 0
                 logging.info('    Processing chrom %s' % chrom.decode())
-                num_reads = self.chrom_lens[chrom] - r + 1
+                num_reads = len(seq) - r + 1
                 count_ref += num_reads
                 for i in range(num_reads):
                     read = seq[i:i+r]
@@ -179,6 +210,10 @@ class VarRanker:
         logging.info('  Avg probability of added reads:   %f' % self.wgt_added)
 
     def count_kmers_ref(self, cache_from=None, cache_to=None, threads=1):
+
+        if not self.sequence_loaded():
+            self.load_sequence(self.target_chrom)
+
         logging.info('  Counting reference k-mers')
         self.h_ref = self.counter_maker('Ref', dont_care_below=1,
                                         cache_from=cache_from,
@@ -199,6 +234,10 @@ class VarRanker:
         self.h_ref.finalize()
 
     def count_kmers_added(self, cache_from=None, cache_to=None, threads=1):
+
+        if not self.sequence_loaded():
+            self.load_sequence(self.target_chrom)
+
         logging.info('  Counting augmented k-mers')
         self.h_added = self.counter_maker('Aug', dont_care_below=2,
                                           cache_from=cache_from,
@@ -239,7 +278,7 @@ class VarRanker:
                     if n_pcs >= counter_bar:
                         counter_bar = max(counter_bar+1, int(counter_bar*counter_incr))
                         logging.info('    %d contigs, %d vars; max vars=%d; %0.3f%% done' %
-                                     (n_pcs, n_vars, max_vars, 100.0*float(n_vars)/self.num_v))
+                                     (n_pcs, n_vars, max_vars, 100.0*float(n_vars) / self.num_variants))
                     assert isinstance(pc, bytes)
                     self.h_added.add(pc)
         self.h_added.finalize()
@@ -326,6 +365,8 @@ class VarRanker:
         if self.hap_parser is not None:
             self.hap_parser.reset_chunk()
 
+        self.unload_sequence()
+
         def process_batch(batch, vecs, idss, var_chrom, var_wgts_chrom, cur_count, cur_vars, threadid):
             assert len(batch) == len(vecs)
             query_ref = self.h_ref.query_batch(batch, threads=1, threadid=threadid)
@@ -353,6 +394,9 @@ class VarRanker:
 
         def process_chrom(tup):
             threadid, chrom = tup
+            assert not self.sequence_loaded()
+            self.load_sequence(chrom)
+            logging.info('    In process_chrom for "%s"' % chrom)
             counter_bar = 100
             counter_incr = 1.1
             var_chrom = self.variants[chrom]
@@ -363,8 +407,8 @@ class VarRanker:
             for vi in range(nvar_chrom):
                 if vi >= counter_bar:
                     counter_bar = max(counter_bar + 1, counter_bar*counter_incr)
-                    pct = vi * 100.0 / self.num_v
-                    logging.info('    %d out of %d variants; %0.3f%% done' % (vi, self.num_v, pct))
+                    pct = vi * 100.0 / self.num_variants
+                    logging.info('    %d out of %d variants; %0.3f%% done' % (vi, self.num_variants, pct))
                 pos = var_chrom.poss[vi]
                 r = self.r
                 k = 1
@@ -386,34 +430,26 @@ class VarRanker:
                         batch, vecs, idss = [], [], []
             if len(batch) > 0:
                 process_batch(batch, vecs, idss, var_chrom, var_wgts_chrom, cur_count, cur_vars, threadid)
+            self.unload_sequence()
             return var_wgts_chrom
 
         p = ProcessingPool(threads)
 
         hist_ref, hist_aug = None, None
-        chroms = self.variants.keys()
-        var_wgts_list = p.map(process_chrom, map(lambda x: (x[0]+1, x[1]), enumerate(chroms)))
-        var_wgts_by_chrom = {chrom: wgts for chrom, wgts in zip(chroms, var_wgts_list)}
+        logging.info('  Calling map on %d chromosomes' % len(self.genome_names))
+        var_wgts_list = p.map(process_chrom, map(lambda x: (x[0]+1, x[1]), enumerate(self.genome_names)))
+        var_wgts_by_chrom = {chrom: wgts for chrom, wgts in zip(self.genome_names, var_wgts_list)}
         var_wgts = []
+
+        self.unload_sequence()
+        self.load_sequence()
 
         for chrom, variants in self.variants.items():
             assert len(var_wgts_by_chrom[chrom]) == len(variants.poss)
             for wgt, pos in zip(var_wgts_by_chrom[chrom], variants.poss):
                 var_wgts.append([wgt, chrom, pos])
 
-        assert self.num_v == len(var_wgts)
-
-        # Uncomment the following 2 lines to write SNP hybrid scores to an
-        # intermediate file
-
-        #  with open('hybrid_wgts.txt', 'w') as f_hybrid:
-        #    f_hybrid.write(','.join([str(w) for w in var_wgts]))
-
-        # Uncomment the following 2 lines and comment out all of the function
-        # above this line to resume computation from an intermediate hybrid scores file
-
-        #  with open('hybrid_wgts.txt', 'r') as f_hybrid:
-        #    var_wgts = [float(w) for w in f_hybrid.readline().rstrip().split(',')]
+        assert self.num_variants == len(var_wgts)
 
         logging.info('    Sorting')
         ordered = [(v[1], v[2]) for v in sorted(var_wgts)]
@@ -429,7 +465,7 @@ class VarRanker:
         assert max(tmp_wgts) > min(tmp_wgts)
         min_wgt = min(tmp_wgts)
         range_wgts = max(tmp_wgts) - min_wgt
-        for i in range(self.num_v):
+        for i in range(self.num_variants):
             new_wgt = (-var_wgts[i][0] - min_wgt)*0.99 / range_wgts + 0.01
             assert -0.01 <= new_wgt <= 1.01
             var_wgts[i][0] = new_wgt
@@ -455,8 +491,6 @@ class VarRanker:
                     lower_tier.append((wgt, neighbors, chrom, i))
             num_v += nvar
 
-        assert num_v == self.num_v
-
         if len(upper_tier) == 0:
             logging.warning('  Upper tier empty')
         if len(lower_tier) == 0:
@@ -464,59 +498,10 @@ class VarRanker:
 
         return ordered, self.rank_dynamic_blowup(upper_tier, lower_tier)
 
-    def compute_hybrid(self, chrom_seq, variants, first_var, var_wgts, hist_ref, hist_aug):
-        pos = variants.poss[first_var]
-        num_v = len(variants)
-        r = self.r
-
-        #  if self.variants[first_var].pos < pos or self.variants[first_var].pos >= pos+r:
-        #    return
-
-        # Number of variants in window starting at this one
-        k = 1
-        while first_var+k < num_v and variants.poss[first_var+k] < pos + r:
-            k += 1
-
-        if k > self.max_v_in_window:
-            alt_freqs = [(variants.sum_probs(first_var+j), first_var+j) for j in range(1, k)]
-            ids = [first_var] + [f[1] for f in sorted(alt_freqs, reverse=True)[:self.max_v_in_window-1]]
-            ids = list(sorted(ids))
-        else:
-            ids = list(range(first_var, first_var+k))
-
-        queries_per_batch = 10000
-        batch, vecs = [], []
-        cur_count, cur_vars = [None], [None]
-        it = PseudocontigIterator(chrom_seq, variants, ids, r)
-        while True:
-            for pc in it:
-                batch.append(pc)
-                vecs.append(it.vec)
-                if len(batch) >= queries_per_batch:
-                    break
-            if len(batch) == 0:
-                break
-            assert len(batch) == len(vecs)
-            query_ref = self.h_ref.query_batch(batch)
-            query_aug = self.h_added.query_batch(batch)
-            for c_ref, c_aug, pc, vec in zip(query_ref, query_aug, batch, vecs):
-                if c_ref == -1:
-                    assert c_aug == -1
-                    continue
-                assert c_ref >= 0
-                if c_aug == 0:
-                    c_aug = 1
-                c_total = c_ref + c_aug
-                # Average relative probability of this read's other mappings
-                p = self.prob_read(variants, ids, vec, cur_vars, cur_count)
-                avg_wgt = c_ref * self.wgt_ref + (c_aug-1) * self.wgt_added
-                hybrid_wgt = (p - avg_wgt) / c_total
-                for j in range(len(ids)):
-                    if vec[j]:
-                        var_wgts[ids[j]] -= hybrid_wgt
-            batch, vecs = [], []
-
     def rank_pop_cov(self, with_blowup=False, threshold=0.5):
+        if not self.sequence_loaded():
+            self.load_sequence(self.target_chrom)
+
         if with_blowup:
             logging.info('Popcov+-ranking variants')
             upper_tier, lower_tier = [], []
@@ -558,6 +543,8 @@ class VarRanker:
         Variants in tiers should be tuples, each of the form (weight, # neighbors, index in self.variants)
         penalty: Weight multiplier for each variant every time a nearby variant is added to the graph
         """
+        if not self.sequence_loaded():
+            self.load_sequence(self.target_chrom)
 
         if not upper_tier and not lower_tier:
             return []
@@ -647,13 +634,8 @@ def go(args):
     max_v = args.prune or r
     counter_type = args.counter or 'KMC3'
 
-    logging.info('Reading genome')
-    genome = read_genome(args.reference, target_chrom=args.chrom)
-
-    logging.info('Parsing 1ksnp')
-    varients = parse_1ksnp(args.vars, G=genome, target_chrom=args.chrom)
-
-    ranker = VarRanker(genome, varients, r, args.phasing, max_v, counter_type, args.temp)
+    ranker = VarRanker(args.reference, args.vars, r, args.phasing,
+                       max_v, counter_type, args.temp, target_chrom=args.chrom)
     if args.pseudocontigs:
         raise RuntimeError('--pseudocontigs not supported')
         # ranker.seen_pcs(o)
