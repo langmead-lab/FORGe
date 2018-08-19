@@ -116,8 +116,8 @@ class PseudocontigIterator:
         start_offset = last_alt_base - self.r
         if start_offset < 0:
             pos = self.vars[0].pos
-
-            prefix = self.seq[pos+start_offset:pos]
+            assert pos >= 0
+            prefix = self.seq[max(pos + start_offset, 0):pos]
             if 'N' in prefix or 'M' in prefix or 'R' in prefix:
                 valid = False
 
