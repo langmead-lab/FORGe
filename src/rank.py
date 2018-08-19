@@ -226,7 +226,7 @@ class VarRanker:
                         else:
                             p *= (1 - sum(variants[var_ids[i]].probs))
                     self.freqs[vec_to_id(vec, counts)] = p
-                    v = get_next_vector(num_v, counts, v)
+                    vec = get_next_vector(num_v, counts, vec)
 
         f = self.freqs[vec_to_id(vec, self.counts)]
         return f
