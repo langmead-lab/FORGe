@@ -71,6 +71,7 @@ class VarRanker:
             for i in range(num_reads):
                 read = seq[i:i+r]
                 if 'N' in read or 'M' in read or 'R' in read:
+                    count_ref -= 1
                     continue
 
                 #total_prob_ref += 1
