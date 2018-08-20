@@ -13,11 +13,15 @@ import sys
 from operator import itemgetter
 from util import PseudocontigIterator, vec_to_id, get_next_vector
 from pathos.multiprocessing import ProcessingPool
+from multiprocessing import Value
 import re
 import os
 
 
 VERSION = '0.0.4'
+
+
+counter = Value('i', 0)
 
 
 class VarRanker:
@@ -365,6 +369,10 @@ class VarRanker:
         if self.hap_parser is not None:
             self.hap_parser.reset_chunk()
 
+        num_v = self.num_variants
+        if not self.sequence_loaded():
+            self.load_sequence()
+            num_v = self.num_variants
         self.unload_sequence()
 
         def process_batch(batch, vecs, idss, var_chrom, var_wgts_chrom, cur_count, cur_vars, threadid):
@@ -393,10 +401,17 @@ class VarRanker:
                         var_wgts_chrom[ids[j]] -= hybrid_wgt
 
         def process_chrom(tup):
+            global counter
             threadid, chrom = tup
             assert not self.sequence_loaded()
             self.load_sequence(chrom)
-            logging.info('    In process_chrom for "%s"' % chrom)
+            if threadid > 0:
+                logging.info('    Hybrid-scoring chromosome "%s" (thread %d)' %
+                             (chrom.decode(), threadid))
+            else:
+                logging.info('    Hybrid-scoring chromosome "%s"' %
+                             chrom.decode())
+            thread_str = '' if threadid == 0 else (' (thread %d)' % threadid)
             counter_bar = 100
             counter_incr = 1.1
             var_chrom = self.variants[chrom]
@@ -404,11 +419,17 @@ class VarRanker:
             var_wgts_chrom = [0] * nvar_chrom
             batch, vecs, idss = [], [], []
             cur_count, cur_vars = [None], [None]
+            niter_to_report = 0
             for vi in range(nvar_chrom):
+                niter_to_report += 1
                 if vi >= counter_bar:
+                    with counter.get_lock():
+                        counter.value += niter_to_report
+                        niter_to_report = 0
                     counter_bar = max(counter_bar + 1, counter_bar*counter_incr)
-                    pct = vi * 100.0 / self.num_variants
-                    logging.info('    %d out of %d variants; %0.3f%% done' % (vi, self.num_variants, pct))
+                    pct = counter.value * 100.0 / num_v
+                    logging.info('    %d out of %d variants; %0.3f%% done%s' %
+                                 (vi, num_v, pct, thread_str))
                 pos = var_chrom.poss[vi]
                 r = self.r
                 k = 1
@@ -428,6 +449,8 @@ class VarRanker:
                     if len(batch) >= query_batch_size:
                         process_batch(batch, vecs, idss, var_chrom, var_wgts_chrom, cur_count, cur_vars, threadid)
                         batch, vecs, idss = [], [], []
+            with counter.get_lock():
+                counter.value += niter_to_report
             if len(batch) > 0:
                 process_batch(batch, vecs, idss, var_chrom, var_wgts_chrom, cur_count, cur_vars, threadid)
             self.unload_sequence()
