@@ -17,7 +17,7 @@ install:
 - conda config --set always_yes yes --set changeps1 no
 - conda update -q conda
 - conda info -a
-- conda env create -f forge.yml
+- conda env create -f env.yml
 - source activate forge
 script:
 - "./unit_test.sh"

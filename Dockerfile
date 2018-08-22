@@ -1,4 +1,4 @@
-FROM python:3.4-jessie
+FROM continuumio/miniconda:4.5.4
 
 RUN apt-get update
 
@@ -6,7 +6,6 @@ RUN apt-get install -y valgrind
 
 ADD src /code/src
 ADD experiment /code/experiment
-ADD requirements.txt /code
-WORKDIR /code
+ADD env.yml /code
 
-RUN pip install -r requirements.txt
+RUN conda env create -f /code/env.yml
