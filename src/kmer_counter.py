@@ -12,7 +12,8 @@ import logging
 import shutil
 import random
 import tempfile
-from util import revcomp
+import subprocess
+from util import revcomp, dump_to_dict
 from collections import Counter
 
 
@@ -54,6 +55,7 @@ class SimpleKmerCounter(object):
         self.r = r
         self.counter = Counter()
         self.dont_care_below = dont_care_below
+        self.tmp_dir = tempfile.mkdtemp(dir=temp)
 
     def add(self, s):
         """ Add canonicalized version of each k-mer substring """
@@ -73,14 +75,16 @@ class SimpleKmerCounter(object):
 
     def query(self, query, threads=0, threadid=0):
         """ Query with each k-mer substring """
-        for x in map(lambda kmer: -1 if kmer is None else self.counter.get(kmer, 0), slice_canonical(query, self.r)):
-            yield x
+        return list(map(lambda kmer: -1 if kmer is None else self.counter.get(kmer, 0), slice_canonical(query, self.r)))
 
     def query_batch(self, queries, threads=0, threadid=0):
         """ Query with each k-mer substring of each query string """
-        for query in queries:
-            for res in self.query(query):
-                yield res
+        output_fn = os.path.join(self.tmp_dir, 'output.tsv')
+        with open(output_fn, 'wb') as fh:
+            for query in queries:
+                for result in self.query(query):
+                    fh.write(b'%d\n' % result)
+        return output_fn
 
 
 class KMC3KmerCounter(object):
@@ -99,7 +103,6 @@ class KMC3KmerCounter(object):
         self.combined_tmp_db = os.path.join(self.tmp_dir, 'combined_tmp.db')
         self.tmp_fh = open(self.batch_mfa, 'wb')
         self.query_mfa = os.path.join(self.tmp_dir, 'query.mfa')
-        self.dump_fn = os.path.join(self.tmp_dir, 'dump.tsv')
         self.query_counts_db = os.path.join(self.tmp_dir, 'query_counts.db')
         self.buffered_bytes = 0
         self.batch_size = batch_size
@@ -107,11 +110,13 @@ class KMC3KmerCounter(object):
         self.first_flush = True
         self.stdout_log = os.path.join(self.tmp_dir, 'stdout.log')
         self.stderr_log = os.path.join(self.tmp_dir, 'stderr.log')
+        self.output_fn = os.path.join(self.tmp_dir, 'query_output.log')
         self.gb = gb
         self.threads = threads
         self.cache_from_dir = cache_from
         self.cache_to_dir = cache_to
         self.cached_to = False
+        self.batch_no = 0
         if cache_from is not None:
             for suf in ['.kmc_pre', '.kmc_suf']:
                 fn = name + '.db' + suf
@@ -131,7 +136,6 @@ class KMC3KmerCounter(object):
                      self.combined_tmp_db + '.kmc_suf',
                      self.query_counts_db + '.kmc_pre',
                      self.query_counts_db + '.kmc_suf',
-                     self.dump_fn,
                      self.stdout_log,
                      self.stderr_log]
         if self.cached_to is None:
@@ -220,24 +224,32 @@ class KMC3KmerCounter(object):
 
     def query(self, query, threads=0, threadid=0):
         assert isinstance(query, bytes)
-        for x in self.query_batch([query], threads=threads, threadid=threadid):
-            yield x
+        output_fn = self.query_batch([query], threads=threads, threadid=threadid)
+        with open(output_fn, 'rb') as fh:
+            return list(map(int, fh.readlines()))
 
     def query_batch(self, queries, threads=0, threadid=0):
         """ Query with a batch of long strings """
         self.finalize()
+        self.batch_no += 1
         if threads == 0:
             threads = self.threads
         threads = '-t%d' % threads
         # Write queries to multi-fasta
-        query_mfa, batch_db, dump_fn = self.query_mfa, self.batch_db, self.dump_fn
+        query_mfa, batch_db = self.query_mfa, self.batch_db
         query_counts_db, working_dir = self.query_counts_db, self.working_dir
+        output_fn = self.output_fn
         if threadid > 0:
-            query_mfa = os.path.join(self.tmp_dir, 'query_thread%02d.mfa' % threadid)
-            batch_db = os.path.join(self.tmp_dir, 'batch_thread%02d.db' % threadid)
-            dump_fn = os.path.join(self.tmp_dir, 'dump_thread%02d.tsv' % threadid)
-            query_counts_db = os.path.join(self.tmp_dir, 'query_counts_thread%02d.db' % threadid)
-            working_dir = os.path.join(self.tmp_dir, 'working_thread%02d' % threadid)
+            query_mfa = os.path.join(self.tmp_dir,
+                                     'query_thread%02d_batch%d.mfa' % (threadid, self.batch_no))
+            batch_db = os.path.join(self.tmp_dir,
+                                    'batch_thread%02d_batch%d.db' % (threadid, self.batch_no))
+            query_counts_db = os.path.join(self.tmp_dir,
+                                           'query_counts_thread%02d_batch%d.db' % (threadid, self.batch_no))
+            working_dir = os.path.join(self.tmp_dir,
+                                       'working_thread%02d_batch%d' % (threadid, self.batch_no))
+            output_fn = os.path.join(self.tmp_dir,
+                                     'query_output%02d_batch%d' % (threadid, self.batch_no))
         if not os.path.exists(working_dir):
             os.makedirs(working_dir)
         else:
@@ -256,20 +268,26 @@ class KMC3KmerCounter(object):
         run('kmc_tools %s simple %s %s intersect %s -ocleft' %
             (threads, self.combined_db, batch_db, query_counts_db),
             self.stdout_log, self.stderr_log)
-        # Dump the intersection file
-        run('kmc_dump %s %s' % (query_counts_db, dump_fn), self.stdout_log, self.stderr_log)
         # Can remove query set now
         os.remove('%s.kmc_pre' % batch_db)
         os.remove('%s.kmc_suf' % batch_db)
-        # Read in dump
-        with open(dump_fn, 'rb') as fh:
-            h = {seq: int(cnt) for seq, cnt in map(lambda ln: ln.rstrip().split(), fh)}
-        os.remove(dump_fn)
-        if threadid > 0:
-            shutil.rmtree(working_dir)
-        for query in queries:
-            for x in map(lambda kmer: -1 if kmer is None else h.get(kmer, 0), slice_canonical(query, self.r)):
-                yield x
+        # Dump the intersection file
+        dump_cmd = 'kmc_dump %s /dev/stdout' % query_counts_db
+        logging.info(dump_cmd)
+        p = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, shell=True)
+        h = dump_to_dict(p.stdout, chunksize=10000)
+        p.wait()
+        if p.returncode != 0:
+            raise RuntimeError('Dump command failed: "%s"' % dump_cmd)
+        # Can remove query counts now
+        os.remove('%s.kmc_pre' % query_counts_db)
+        os.remove('%s.kmc_suf' % query_counts_db)
+        with open(output_fn, 'wb') as fh:
+            for query in queries:
+                for result in map(lambda kmer: -1 if kmer is None else h.get(kmer, 0),
+                                  slice_canonical(query, self.r)):
+                    fh.write(b'%d\n' % result)
+        return output_fn
 
 
 def pytest_generate_tests(metafunc):
@@ -313,14 +331,14 @@ def test_slice_and_canonicalize():
 def test_counter_1(counter_class):
     cnt = counter_class('Test', 4)
     cnt.add(b'ACGT')
-    res = list(cnt.query(b'ACGT'))
+    res = cnt.query(b'ACGT')
     assert 1 == len(res)
     assert 1 == res[0]
 
     cnt = counter_class('Test', 4)
     cnt.add(b'ACGT')
     cnt.add(b'ACNT')
-    res = list(cnt.query(b'ACGT'))
+    res = cnt.query(b'ACGT')
     assert 1 == len(res)
     assert 1 == res[0]
 
@@ -330,7 +348,7 @@ def test_counter_2(counter_class):
     cnt.add(b'ACGTACGTNACGTACGT')
     #         ACGTACGT
     #                  ACGTACGT
-    res = list(cnt.query(b'ACGTACGTN'))
+    res = cnt.query(b'ACGTACGTN')
     assert 2 == len(res)
     assert -1 == res[1]
     assert 2 == res[0]
@@ -344,7 +362,7 @@ def test_counter_3(counter_class):
     #          2222  x  7777    GTAC x 2
     #           3333 x   8888   TACG -> CGTA x 2
     #            4444x    9999  ACGT x 2
-    res = list(cnt.query(b'ACGTACG'))
+    res = cnt.query(b'ACGTACG')
     #                0000
     #                 1111
     #                  2222
@@ -365,8 +383,10 @@ def test_counter_4(counter_class):
     cnt.add(b'CCGT')
     cnt.add(b'TTTT')
     cnt.add(b'AAAA')
-    res = list(cnt.query_batch([b'ACGT', b'CCGT', b'AAAAA']))
-    #                             3        2        22
+    res_fn = cnt.query_batch([b'ACGT', b'CCGT', b'AAAAA'])
+    #                        3        2        22
+    with open(res_fn, 'rb') as fh:
+        res = list(map(int, fh.readlines()))
     assert 4 == len(res)
     assert 3 == res[0]
     assert 2 == res[1]

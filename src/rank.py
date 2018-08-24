@@ -16,12 +16,33 @@ from pathos.multiprocessing import ProcessingPool
 from multiprocessing import Value
 import re
 import os
+import code
+import traceback
+import signal
 
 
-VERSION = '0.0.4'
+VERSION = '0.1.0'
+DEFAULT_BATCH_SIZE = 200000
 
 
 counter = Value('i', 0)
+
+
+def debug(sig, frame):
+    """Interrupt running process, and provide a python prompt for
+    interactive debugging."""
+    d = {'_frame': frame}         # Allow access to frame object.
+    d.update(frame.f_globals)  # Unless shadowed by global
+    d.update(frame.f_locals)
+
+    i = code.InteractiveConsole(d)
+    message = "Signal received : entering python shell.\nTraceback:\n"
+    message += ''.join(traceback.format_stack(frame))
+    i.interact(message)
+
+
+def listen():
+    signal.signal(signal.SIGUSR1, debug)  # Register handler
 
 
 class VarRanker:
@@ -333,8 +354,9 @@ class VarRanker:
                 p *= (1 - variants.sum_probs(vi))
             return p
 
-    def rank(self, method, out_file, query_batch_size=1000000,
-             cache_from=None, cache_to=None, threads=1):
+    def rank(self, method, out_file, query_batch_size=DEFAULT_BATCH_SIZE,
+             cache_from=None, cache_to=None, threads=1,
+             stop_after_counting=False):
         ordered_blowup = None
         if method == 'popcov':
             ordered = self.rank_pop_cov()
@@ -342,14 +364,18 @@ class VarRanker:
             ordered = self.rank_pop_cov(True)
         elif method == 'hybrid':
             self.count_kmers(cache_from=cache_from, cache_to=cache_to, threads=threads)
+            if stop_after_counting:
+                return
             ordered, ordered_blowup = self.rank_hybrid(query_batch_size=query_batch_size, threads=threads)
         else:
             raise RuntimeError('Bad ordering method: "%s"' % method)
 
+        logging.info('Writing hybrid ranking (without blowup control) to "%s"' % out_file)
         if ordered:
             with open(out_file, 'wb') as f:
                 f.write(b'\t'.join(str(tup[0]).encode() + b',' + str(tup[1] + 1).encode() for tup in ordered))
 
+        logging.info('Writing hybrid ranking (with blowup control) to "%s"' % (out_file + '.blowup'))
         if ordered_blowup:
             with open(out_file + '.blowup', 'wb') as f:
                 f.write(b'\t'.join(str(tup[0]).encode() + b',' + str(tup[1] + 1).encode() for tup in ordered_blowup))
@@ -360,7 +386,7 @@ class VarRanker:
         self.count_kmers_added(cache_from=cache_from, cache_to=cache_to, threads=threads)
         self.avg_read_prob(cache_from=cache_from, cache_to=cache_to)
 
-    def rank_hybrid(self, threshold=0.5, query_batch_size=1000000, threads=1):
+    def rank_hybrid(self, threshold=0.5, query_batch_size=DEFAULT_BATCH_SIZE, threads=1):
         """
         `threshold` for blowup avoidance
         """
@@ -373,32 +399,33 @@ class VarRanker:
         if not self.sequence_loaded():
             self.load_sequence()
             num_v = self.num_variants
+        genome_names_list = list(sorted(self.genome_names, reverse=True, key=lambda x: len(self.variants[x].poss)))
         self.unload_sequence()
 
         def process_batch(batch, vecs, idss, var_chrom, var_wgts_chrom, cur_count, cur_vars, threadid):
             assert len(batch) == len(vecs)
-            query_ref = self.h_ref.query_batch(batch, threads=1, threadid=threadid)
-            query_aug = self.h_added.query_batch(batch, threads=1, threadid=threadid)
-            for c_ref, c_aug, pc, vec, ids in zip(query_ref, query_aug, batch, vecs, idss):
-                if c_ref == -1:
-                    assert c_aug == -1
-                    continue
-                assert c_ref >= 0
-                if c_aug == 0:
-                    c_aug = 1
-                prob = self.prob_read(var_chrom, ids, vec, cur_vars, cur_count)
-                if hist_ref is not None:
-                    hist_ref.add(c_ref)
-                if hist_aug is not None:
-                    hist_aug.add(c_aug)
-                c_total = c_ref + c_aug
+            query_ref_fn = self.h_ref.query_batch(batch, threads=1, threadid=threadid)
+            query_aug_fn = self.h_added.query_batch(batch, threads=1, threadid=threadid)
+            with open(query_ref_fn, 'rb') as fh_ref:
+                with open(query_aug_fn, 'rb') as fh_aug:
+                    for pc, vec, ids in zip(batch, vecs, idss):
+                        c_ref = int(fh_ref.readline())
+                        c_aug = int(fh_aug.readline())
+                        if c_ref == -1:
+                            assert c_aug == -1
+                            continue
+                        assert c_ref >= 0
+                        if c_aug == 0:
+                            c_aug = 1
+                        prob = self.prob_read(var_chrom, ids, vec, cur_vars, cur_count)
+                        c_total = c_ref + c_aug
 
-                # Average relative probability of this read's other mappings
-                avg_wgt = c_ref * self.wgt_ref + (c_aug - 1) * self.wgt_added
-                hybrid_wgt = (prob - avg_wgt) / c_total
-                for j in range(len(ids)):
-                    if vec[j]:
-                        var_wgts_chrom[ids[j]] -= hybrid_wgt
+                        # Average relative probability of this read's other mappings
+                        avg_wgt = c_ref * self.wgt_ref + (c_aug - 1) * self.wgt_added
+                        hybrid_wgt = (prob - avg_wgt) / c_total
+                        for j in range(len(ids)):
+                            if vec[j]:
+                                var_wgts_chrom[ids[j]] -= hybrid_wgt
 
         def process_chrom(tup):
             global counter
@@ -429,7 +456,7 @@ class VarRanker:
                     counter_bar = max(counter_bar + 1, counter_bar*counter_incr)
                     pct = counter.value * 100.0 / num_v
                     logging.info('    %d out of %d variants; %0.3f%% done%s' %
-                                 (vi, num_v, pct, thread_str))
+                                 (counter.value, num_v, pct, thread_str))
                 pos = var_chrom.poss[vi]
                 r = self.r
                 k = 1
@@ -453,15 +480,18 @@ class VarRanker:
                 counter.value += niter_to_report
             if len(batch) > 0:
                 process_batch(batch, vecs, idss, var_chrom, var_wgts_chrom, cur_count, cur_vars, threadid)
+            if threadid > 0:
+                logging.info('    Processed final batch "%s" (thread %d)' %
+                             (chrom.decode(), threadid))
             self.unload_sequence()
             return var_wgts_chrom
 
-        p = ProcessingPool(threads)
+        njobs = len(genome_names_list)
+        p = ProcessingPool(nodes=min(threads, njobs))
 
-        hist_ref, hist_aug = None, None
-        logging.info('  Calling map on %d chromosomes' % len(self.genome_names))
-        var_wgts_list = p.map(process_chrom, map(lambda x: (x[0]+1, x[1]), enumerate(self.genome_names)))
-        var_wgts_by_chrom = {chrom: wgts for chrom, wgts in zip(self.genome_names, var_wgts_list)}
+        logging.info('  Calling map on %d chromosomes' % njobs)
+        var_wgts_list = p.map(process_chrom, map(lambda x: (x[0]+1, x[1]), enumerate(genome_names_list)))
+        var_wgts_by_chrom = {chrom: wgts for chrom, wgts in zip(genome_names_list, var_wgts_list)}
         var_wgts = []
 
         self.unload_sequence()
@@ -652,6 +682,7 @@ class VarRanker:
 
 
 def go(args):
+    listen()
     r = args.window_size or 35
     o = args.output or 'ordered.txt'
     max_v = args.prune or r
@@ -668,7 +699,8 @@ def go(args):
                 os.makedirs(args.cache_to)
         ranker.rank(args.method, o, query_batch_size=args.query_batch,
                     cache_from=args.cache_from, cache_to=args.cache_to,
-                    threads=args.threads)
+                    threads=args.threads,
+                    stop_after_counting=args.stop_after_counting)
 
 
 if __name__ == '__main__':
@@ -682,44 +714,52 @@ if __name__ == '__main__':
 
     # Print file's docstring if -h is invoked
     parser = argparse.ArgumentParser(description=__doc__,
-            formatter_class=argparse.RawDescriptionHelpFormatter)
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
 
     parser.add_argument('--method', type=str, required=True,
-        help='Variant ranking method. Currently supported ranking methods: '
-             '[popcov | popcov-blowup | hybrid]\n\'hybrid\' will produce '
-             'hybrid ranking files both with and without blowup avoidance,')
-    parser.add_argument('--reference', type=str, required=True, 
-        help='Path to fasta file containing reference genome')
-    parser.add_argument('--temp', type=str, required=False, 
-        help='Set base temporary directory')
+                        help='Variant ranking method. Supported methods: '
+                             '[popcov | popcov-blowup | hybrid]\n\'hybrid\' '
+                             'produces rankings with and without blowup'
+                             'avoidance')
+    parser.add_argument('--reference', type=str, required=True,
+                        help='Path to fasta file containing reference genome')
+    parser.add_argument('--temp', type=str, required=False,
+                        help='Set base temporary directory')
     parser.add_argument("--vars", type=str, required=True, metavar='<path>',
-        help="1ksnp file containing variant information")
+                        help="1ksnp file containing variant information")
     parser.add_argument('--chrom', type=str, metavar='<name>',
-        help='Name of chromosome from reference genome to process. If not '
-             'present, process all chromosomes.')
+                        help='Name of chromosome from reference genome to '
+                             'process. Default: process all chromosomes.')
     parser.add_argument('--window-size', type=int, metavar='<int>',
-        help='Radius of window (i.e. max read length) to use. Larger values '
-             'will take longer. Default: 35')
-    parser.add_argument('--query-batch', type=int, default=100000000, metavar='<int>',
-        help='Number of queries to batch when querying k-mer counts; '
-             'default: 100000000')
+                        help='Radius of window (i.e. max read length) to use. '
+                             'Larger values will take longer. Default: 35')
+    parser.add_argument('--query-batch', type=int, default=DEFAULT_BATCH_SIZE,
+                        metavar='<int>',
+                        help='Number of queries to batch when querying k-mer '
+                             'counts; default: %d' % DEFAULT_BATCH_SIZE)
     parser.add_argument('--pseudocontigs', action="store_true",
-        help=argparse.SUPPRESS) # help='Rank pseudocontigs rather than SNPs')
+                        help=argparse.SUPPRESS)
     parser.add_argument('--phasing', type=str, required=False, metavar='<path>',
-        help="File containing phasing information for each individual")
+                        help='File with phasing information for each individual')
     parser.add_argument('--output', type=str, required=False, metavar='<path>',
-        help="File to write output ranking to. Default: 'ordered.txt'")
+                        help='Write output ranking here. Default: \'ordered.txt\'')
     parser.add_argument('--cache-to', type=str, required=False,
-        metavar='<path>', help="Cache results in given directory")
+                        metavar='<path>',
+                        help='Cache results in given directory')
     parser.add_argument('--cache-from', type=str, required=False,
-        metavar='<path>', help="Use cached results from given directory")
+                        metavar='<path>',
+                        help='Use cached results from given directory')
     parser.add_argument('--counter', type=str, required=False, default='KMC3',
-        help='Type of counter to use; options are: "Simple"; '
-             '"KMC3,<gb>,<batch_size>"')
+                        help='Type of counter to use; options are: "Simple"; '
+                             '"KMC3,<gb>,<batch_size>"')
     parser.add_argument('--prune', type=int, required=False,
-        help='In each window, prune haplotypes by only processing up to '
-             'this many variants. We recommend including this argument when '
-             'ranking with the hybrid strategy for window sizes over 35.')
+                        help='In each window, prune haplotypes by only '
+                             'processing up to this many variants. We '
+                             'recommend including this argument when ranking '
+                             'with the hybrid strategy for window sizes over 35.')
     parser.add_argument('--threads', type=int, default=1,
-        help='Use up to this many threads where possible.')
+                        help='Use up to this many threads where possible.')
+    parser.add_argument('--stop-after-counting', action="store_true", default=False,
+                        help='Stop hybrid-ranking procedure after k-mer '
+                             'counting; usually in combination with --cache-to')
     go(parser.parse_args(sys.argv[1:]))
