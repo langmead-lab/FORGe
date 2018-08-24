@@ -5,9 +5,12 @@ Utility functions
 """
 
 from future.utils import implements_iterator
+import os
 import re
 import string
 import cProfile
+import pandas
+import tempfile
 from variant import VariantSet
 from collections import OrderedDict
 
@@ -176,6 +179,22 @@ class PseudocontigIterator(object):
 
             if all_acgt_re.match(read):
                 return read
+
+
+def dump_to_dict(dump_fn, chunksize=None):
+    """
+    Read KMC dump file into a dictionary associating counts with kmers
+    """
+    df = pandas.read_csv(dump_fn, sep='\t', header=None,
+                         names=['kmer', 'count'], chunksize=chunksize,
+                         encoding='idna')
+    if chunksize is not None:
+        d = {}
+        for chunk in df:
+            d.update(zip(map(lambda x: x.encode(), chunk['kmer']), chunk['count']))
+        return d
+    else:
+        return dict(zip(map(lambda x: x.encode(), df['kmer']), df['count']))
 
 
 def test_get_next_vector():
@@ -347,3 +366,36 @@ def test_quantiler_1():
     assert 50 == qu['q2']
     assert 75 == qu['q3']
     assert 99 == qu['max']
+
+
+def test_dump_to_dict_1():
+    tmpdir = tempfile.mkdtemp()
+    dump_fn = os.path.join(tmpdir, 'dump.tsv')
+    with open(dump_fn, 'wb') as fh:
+        fh.write(b'''ACGT\t1
+CCGT\t2
+GCGT\t10
+TCGT\t9999''')
+    with open(dump_fn, 'rb') as fh:
+        d = dump_to_dict(fh)
+    assert 4 == len(d)
+    assert 1 == d[b'ACGT']
+    assert 2 == d[b'CCGT']
+    assert 10 == d[b'GCGT']
+    assert 9999 == d[b'TCGT']
+
+
+def test_dump_to_dict_2():
+    tmpdir = tempfile.mkdtemp()
+    dump_fn = os.path.join(tmpdir, 'dump.tsv')
+    with open(dump_fn, 'wb') as fh:
+        fh.write(b'''ACGT\t1
+CCGT\t2
+GCGT\t10
+TCGT\t9999''')
+    d = dump_to_dict(dump_fn, chunksize=2)
+    assert 4 == len(d)
+    assert 1 == d[b'ACGT']
+    assert 2 == d[b'CCGT']
+    assert 10 == d[b'GCGT']
+    assert 9999 == d[b'TCGT']
