@@ -142,10 +142,12 @@ class KMC3KmerCounter(object):
             to_delete.append(self.combined_db + '.kmc_pre')
             to_delete.append(self.combined_db + '.kmc_suf')
         for fn in to_delete:
-            if os.path.exists(fn):
+            try:
                 os.remove(fn)
+            except OSError:
+                pass
         if os.path.exists(self.working_dir):
-            shutil.rmtree(self.working_dir)
+            shutil.rmtree(self.working_dir, ignore_errors=True)
 
     def add(self, s):
         if self.cache_from_dir is not None:
