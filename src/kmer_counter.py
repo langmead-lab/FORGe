@@ -73,11 +73,11 @@ class SimpleKmerCounter(object):
     def cache_to(self):
         pass  # nop
 
-    def query(self, query, threads=0, threadid=0):
+    def query(self, query, threads=0, procid=0):
         """ Query with each k-mer substring """
         return list(map(lambda kmer: -1 if kmer is None else self.counter.get(kmer, 0), slice_canonical(query, self.r)))
 
-    def query_batch(self, queries, threads=0, threadid=0):
+    def query_batch(self, queries, threads=0, procid=0):
         """ Query with each k-mer substring of each query string """
         output_fn = os.path.join(self.tmp_dir, 'output.tsv')
         with open(output_fn, 'wb') as fh:
@@ -224,13 +224,13 @@ class KMC3KmerCounter(object):
             self.combined_db = full
             self.cached_to = True
 
-    def query(self, query, threads=0, threadid=0):
+    def query(self, query, threads=0, procid=0):
         assert isinstance(query, bytes)
-        output_fn = self.query_batch([query], threads=threads, threadid=threadid)
+        output_fn = self.query_batch([query], threads=threads, procid=procid)
         with open(output_fn, 'rb') as fh:
             return list(map(int, fh.readlines()))
 
-    def query_batch(self, queries, threads=0, threadid=0):
+    def query_batch(self, queries, threads=0, procid=0):
         """ Query with a batch of long strings """
         self.finalize()
         self.batch_no += 1
@@ -241,17 +241,17 @@ class KMC3KmerCounter(object):
         query_mfa, batch_db = self.query_mfa, self.batch_db
         query_counts_db, working_dir = self.query_counts_db, self.working_dir
         output_fn = self.output_fn
-        if threadid > 0:
+        if procid > 0:
             query_mfa = os.path.join(self.tmp_dir,
-                                     'query_thread%02d_batch%d.mfa' % (threadid, self.batch_no))
+                                     'query_thread%02d_batch%d.mfa' % (procid, self.batch_no))
             batch_db = os.path.join(self.tmp_dir,
-                                    'batch_thread%02d_batch%d.db' % (threadid, self.batch_no))
+                                    'batch_thread%02d_batch%d.db' % (procid, self.batch_no))
             query_counts_db = os.path.join(self.tmp_dir,
-                                           'query_counts_thread%02d_batch%d.db' % (threadid, self.batch_no))
+                                           'query_counts_thread%02d_batch%d.db' % (procid, self.batch_no))
             working_dir = os.path.join(self.tmp_dir,
-                                       'working_thread%02d_batch%d' % (threadid, self.batch_no))
+                                       'working_thread%02d_batch%d' % (procid, self.batch_no))
             output_fn = os.path.join(self.tmp_dir,
-                                     'query_output%02d_batch%d' % (threadid, self.batch_no))
+                                     'query_output%02d_batch%d' % (procid, self.batch_no))
         if not os.path.exists(working_dir):
             os.makedirs(working_dir)
         else:

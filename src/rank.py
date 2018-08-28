@@ -28,7 +28,7 @@ DEFAULT_BATCH_SIZE = 200000
 counter = Value('i', 0)
 
 
-def debug(sig, frame):
+def debug(_, frame):
     """Interrupt running process, and provide a python prompt for
     interactive debugging."""
     d = {'_frame': frame}         # Allow access to frame object.
@@ -93,7 +93,7 @@ class VarRanker:
         return self.variants is not None
 
     def counter_maker(self, name, dont_care_below=1,
-                      cache_from=None, cache_to=None, threads=1):
+                      cache_from=None, cache_to=None, nslots=1):
         toks = self.counter_type.split(',')
         if toks[0] == 'Simple':
             return kmer_counter.SimpleKmerCounter(name, self.r,
@@ -105,7 +105,7 @@ class VarRanker:
             gb = int(toks[1]) if len(toks) > 1 else 4
             batch_sz = int(toks[2]) if len(toks) > 2 else -1
             return kmer_counter.KMC3KmerCounter(name, self.r,
-                                                threads=threads, gb=gb,
+                                                threads=nslots, gb=gb,
                                                 batch_size=batch_sz,
                                                 dont_care_below=dont_care_below,
                                                 temp=self.temp,
@@ -234,7 +234,7 @@ class VarRanker:
         logging.info('  Avg probability of reads in ref:  %f' % self.wgt_ref)
         logging.info('  Avg probability of added reads:   %f' % self.wgt_added)
 
-    def count_kmers_ref(self, cache_from=None, cache_to=None, threads=1):
+    def count_kmers_ref(self, cache_from=None, cache_to=None, nslots=1):
 
         if not self.sequence_loaded():
             self.load_sequence(self.target_chrom)
@@ -243,7 +243,7 @@ class VarRanker:
         self.h_ref = self.counter_maker('Ref', dont_care_below=1,
                                         cache_from=cache_from,
                                         cache_to=cache_to,
-                                        threads=threads)
+                                        nslots=nslots)
         assert self.h_ref is not None
         if cache_from is not None:
             logging.info('    retrieving from cache file "%s"' % self.h_ref.combined_db)
@@ -258,7 +258,7 @@ class VarRanker:
             logging.info('    %d contigs, %d bases' % (n_pcs, tot_pc_len))
         self.h_ref.finalize()
 
-    def count_kmers_added(self, cache_from=None, cache_to=None, threads=1):
+    def count_kmers_added(self, cache_from=None, cache_to=None, nslots=1):
 
         if not self.sequence_loaded():
             self.load_sequence(self.target_chrom)
@@ -267,7 +267,7 @@ class VarRanker:
         self.h_added = self.counter_maker('Aug', dont_care_below=2,
                                           cache_from=cache_from,
                                           cache_to=cache_to,
-                                          threads=threads)
+                                          nslots=nslots)
 
         if cache_from is not None:
             logging.info('    retrieving from cache file "%s"' % self.h_added.combined_db)
@@ -355,7 +355,7 @@ class VarRanker:
             return p
 
     def rank(self, method, out_file, query_batch_size=DEFAULT_BATCH_SIZE,
-             cache_from=None, cache_to=None, threads=1,
+             cache_from=None, cache_to=None, nslots=1, threads_per=1,
              stop_after_counting=False):
         ordered_blowup = None
         if method == 'popcov':
@@ -363,10 +363,12 @@ class VarRanker:
         elif method == 'popcov-blowup':
             ordered = self.rank_pop_cov(True)
         elif method == 'hybrid':
-            self.count_kmers(cache_from=cache_from, cache_to=cache_to, threads=threads)
+            self.count_kmers(cache_from=cache_from, cache_to=cache_to, nslots=nslots)
             if stop_after_counting:
                 return
-            ordered, ordered_blowup = self.rank_hybrid(query_batch_size=query_batch_size, threads=threads)
+            ordered, ordered_blowup = self.rank_hybrid(
+                query_batch_size=query_batch_size, threads_per=threads_per,
+                nprocs=nslots)
         else:
             raise RuntimeError('Bad ordering method: "%s"' % method)
 
@@ -380,13 +382,15 @@ class VarRanker:
             with open(out_file + '.blowup', 'wb') as f:
                 f.write(b'\t'.join(str(tup[0]).encode() + b',' + str(tup[1] + 1).encode() for tup in ordered_blowup))
 
-    def count_kmers(self, cache_from=None, cache_to=None, threads=1):
+    def count_kmers(self, cache_from=None, cache_to=None, nslots=1):
         logging.info('  Counting k-mers')
-        self.count_kmers_ref(cache_from=cache_from, cache_to=cache_to, threads=threads)
-        self.count_kmers_added(cache_from=cache_from, cache_to=cache_to, threads=threads)
+        self.count_kmers_ref(cache_from=cache_from, cache_to=cache_to,
+                             nslots=nslots)
+        self.count_kmers_added(cache_from=cache_from, cache_to=cache_to,
+                               nslots=nslots)
         self.avg_read_prob(cache_from=cache_from, cache_to=cache_to)
 
-    def rank_hybrid(self, threshold=0.5, query_batch_size=DEFAULT_BATCH_SIZE, threads=1):
+    def rank_hybrid(self, threshold=0.5, query_batch_size=DEFAULT_BATCH_SIZE, nprocs=1, threads_per=1):
         """
         `threshold` for blowup avoidance
         """
@@ -402,10 +406,10 @@ class VarRanker:
         genome_names_list = list(sorted(self.genome_names, reverse=True, key=lambda x: len(self.variants[x].poss)))
         self.unload_sequence()
 
-        def process_batch(batch, vecs, idss, var_chrom, var_wgts_chrom, cur_count, cur_vars, threadid):
+        def process_batch(batch, vecs, idss, var_chrom, var_wgts_chrom, cur_count, cur_vars, procid):
             assert len(batch) == len(vecs)
-            query_ref_fn = self.h_ref.query_batch(batch, threads=1, threadid=threadid)
-            query_aug_fn = self.h_added.query_batch(batch, threads=1, threadid=threadid)
+            query_ref_fn = self.h_ref.query_batch(batch, threads=threads_per, procid=procid)
+            query_aug_fn = self.h_added.query_batch(batch, threads=threads_per, procid=procid)
             with open(query_ref_fn, 'rb') as fh_ref:
                 with open(query_aug_fn, 'rb') as fh_aug:
                     for pc, vec, ids in zip(batch, vecs, idss):
@@ -429,16 +433,16 @@ class VarRanker:
 
         def process_chrom(tup):
             global counter
-            threadid, chrom = tup
+            procid, chrom = tup
             assert not self.sequence_loaded()
             self.load_sequence(chrom)
-            if threadid > 0:
+            if procid > 0:
                 logging.info('    Hybrid-scoring chromosome "%s" (thread %d)' %
-                             (chrom.decode(), threadid))
+                             (chrom.decode(), procid))
             else:
                 logging.info('    Hybrid-scoring chromosome "%s"' %
                              chrom.decode())
-            thread_str = '' if threadid == 0 else (' (thread %d)' % threadid)
+            thread_str = '' if procid == 0 else (' (thread %d)' % procid)
             counter_bar = 100
             counter_incr = 1.1
             var_chrom = self.variants[chrom]
@@ -474,23 +478,28 @@ class VarRanker:
                     vecs.append(it.vec[:])
                     idss.append(ids)
                     if len(batch) >= query_batch_size:
-                        process_batch(batch, vecs, idss, var_chrom, var_wgts_chrom, cur_count, cur_vars, threadid)
+                        process_batch(batch, vecs, idss, var_chrom,
+                                      var_wgts_chrom, cur_count, cur_vars,
+                                      procid)
                         batch, vecs, idss = [], [], []
             with counter.get_lock():
                 counter.value += niter_to_report
             if len(batch) > 0:
-                process_batch(batch, vecs, idss, var_chrom, var_wgts_chrom, cur_count, cur_vars, threadid)
-            if threadid > 0:
+                process_batch(batch, vecs, idss, var_chrom,
+                              var_wgts_chrom, cur_count, cur_vars,
+                              procid)
+            if procid > 0:
                 logging.info('    Processed final batch "%s" (thread %d)' %
-                             (chrom.decode(), threadid))
+                             (chrom.decode(), procid))
             self.unload_sequence()
             return var_wgts_chrom
 
         njobs = len(genome_names_list)
-        p = ProcessingPool(nodes=min(threads, njobs))
+        p = ProcessingPool(nodes=min(nprocs, njobs))
 
         logging.info('  Calling map on %d chromosomes' % njobs)
-        var_wgts_list = p.map(process_chrom, map(lambda x: (x[0]+1, x[1]), enumerate(genome_names_list)))
+        var_wgts_list = p.map(process_chrom, map(lambda x: (x[0]+1, x[1]),
+                                                 enumerate(genome_names_list)))
         var_wgts_by_chrom = {chrom: wgts for chrom, wgts in zip(genome_names_list, var_wgts_list)}
         var_wgts = []
 
@@ -699,7 +708,7 @@ def go(args):
                 os.makedirs(args.cache_to)
         ranker.rank(args.method, o, query_batch_size=args.query_batch,
                     cache_from=args.cache_from, cache_to=args.cache_to,
-                    threads=args.threads,
+                    nslots=args.nslots, threads_per=args.nthreads_per,
                     stop_after_counting=args.stop_after_counting)
 
 
@@ -757,8 +766,15 @@ if __name__ == '__main__':
                              'processing up to this many variants. We '
                              'recommend including this argument when ranking '
                              'with the hybrid strategy for window sizes over 35.')
-    parser.add_argument('--threads', type=int, default=1,
-                        help='Use up to this many threads where possible.')
+    parser.add_argument('--nslots', type=int, default=1,
+                        help='Number of "slots", usually limited by memory.  '
+                             'This gets passed as number of threads to use '
+                             'during all the counting phases.  Also used as '
+                             'the number of processes to use when '
+                             'multiprocessing during hybrid ranking.')
+    parser.add_argument('--nthreads-per', type=int, default=1,
+                        help='Number of threads per process during hybrid '
+                             'ranking.')
     parser.add_argument('--stop-after-counting', action="store_true", default=False,
                         help='Stop hybrid-ranking procedure after k-mer '
                              'counting; usually in combination with --cache-to')
