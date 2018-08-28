@@ -36,7 +36,6 @@ import sys
 import argparse
 
 
-ENV_NAME = 'forge'  # set by env.yml
 RANK_BIN = '/code/src/rank.py'  # set by Dockerfile
 DOCKER_OPTIONS = '--cap-add=SYS_PTRACE --security-opt seccomp=unconfined'  # for gdb
 
@@ -57,11 +56,15 @@ def to_singularity_mounts(mount_list):
     return ' '.join(['-B %s:%s' % (src, dst) for src, dst in mount_list])
 
 
-def run_forge(mount_list, env_dict, pass_through, image, tag, docker=True):
+def run_forge(mount_list, env_dict, pass_through, image, tag,
+              conda_env_name=None, interpreter='python', docker=True):
     image_url = ':'.join([image, tag])
     env_list = ['%s=%s' % (k, v) for k, v in env_dict.items()]
-    cmd_run = '/bin/bash -c "source activate %s && python %s %s"' %\
-              (ENV_NAME, RANK_BIN, ' '.join(pass_through))
+    conda_cmd = ''
+    if conda_env_name is not None:
+        conda_cmd = 'source activate %s &&' % conda_env_name
+    cmd_run = '/bin/bash -c "%s %s %s %s"' %\
+              (conda_cmd, interpreter, RANK_BIN, ' '.join(pass_through))
     if docker:
         mount_str = to_docker_mounts(mount_list)
         cmd = 'docker run %s %s %s %s %s' %\
@@ -95,12 +98,19 @@ def go():
     parser.add_argument('--image', default='benlangmead/forge')
     parser.add_argument('--tag', default='latest')
     parser.add_argument('--system', default='docker', help='docker or singularity')
+    parser.add_argument('--interpreter', default='python',
+                        help='e.g. "python" "python3" or "pypy3"')
+    parser.add_argument('--conda-env', required=False,
+                        help='conda env to source just before running FORGe')
     args = parser.parse_args(sys.argv[1:pass_through_i])
     mounts = []
     for mount_str in args.mount:
         tokens = mount_str.split(':')
         mounts.append((tokens[0], tokens[1]))
-    run_forge(mounts, {}, pass_through, args.image, args.tag, args.system == 'docker')
+    run_forge(mounts, {}, pass_through, args.image, args.tag,
+              docker=args.system == 'docker',
+              conda_env_name=args.conda_env,
+              interpreter=args.interpreter)
 
 
 if __name__ == '__main__':
