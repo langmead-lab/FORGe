@@ -8,6 +8,7 @@ python:
 before_install:
 - sudo apt-get update
 install:
+- export INSTALL_DIR=`pwd`
 - wget https://github.com/gmarcais/Jellyfish/releases/download/v2.2.10/jellyfish-2.2.10.tar.gz
 - tar zxf jellyfish-2.2.10.tar.gz
 - pushd jellyfish-2.2.10 &&
@@ -15,8 +16,8 @@ install:
       make &&
       sudo make install &&
       popd
-- export PKG_CONFIG_PATH=$HOME/jellyfish-2.2.10 &&
-      pushd $HOME/jellyfish-2.2.10/swig/python &&
+- export PKG_CONFIG_PATH=$INSTALL_DIR/jellyfish-2.2.10 &&
+      pushd $INSTALL_DIR/jellyfish-2.2.10/swig/python &&
       python setup.py build &&
       python setup.py install &&
       popd
