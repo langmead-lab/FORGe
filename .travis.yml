@@ -10,7 +10,7 @@ before_install:
 install:
 - wget https://github.com/gmarcais/Jellyfish/releases/download/v2.2.10/jellyfish-2.2.10.tar.gz
 - tar zxf jellyfish-2.2.10.tar.gz
-- cd jellyfish-2.2.10 && ./configure --enable-python-binding --prefix=$HOME && make && make install
+- pushd jellyfish-2.2.10 && ./configure --enable-python-binding --prefix=$HOME && make && make install && popd
 - python -m pip install -r requirements.txt
 script:
 - "./unit_test.sh"
