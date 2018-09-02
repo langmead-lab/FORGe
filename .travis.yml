@@ -10,15 +10,15 @@ before_install:
 install:
 - wget https://github.com/gmarcais/Jellyfish/releases/download/v2.2.10/jellyfish-2.2.10.tar.gz
 - tar zxf jellyfish-2.2.10.tar.gz
-- pushd jellyfish-2.2.10 && \
-      ./configure --enable-python-binding && \
-      make && \
-      sudo make install && \
+- pushd jellyfish-2.2.10 &&
+      ./configure --enable-python-binding &&
+      make &&
+      sudo make install &&
       popd
-- export PKG_CONFIG_PATH=$HOME/jellyfish-2.2.10 && \
-      pushd $HOME/jellyfish-2.2.10/swig/python && \
-      python setup.py build && \
-      python setup.py install && \
+- export PKG_CONFIG_PATH=$HOME/jellyfish-2.2.10 &&
+      pushd $HOME/jellyfish-2.2.10/swig/python &&
+      python setup.py build &&
+      python setup.py install &&
       popd
 - python -m pip install -r requirements.txt
 script:
