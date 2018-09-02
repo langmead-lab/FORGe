@@ -4,7 +4,7 @@ RUN apt-get update -y
 RUN apt-get install -y python python-dev python-pip python3 python3-dev python3-venv python3-pip
 
 RUN wget https://github.com/gmarcais/Jellyfish/releases/download/v2.2.10/jellyfish-2.2.10.tar.gz
-RUN tar zxf jellyfish-2.2.10.tar.gz
+RUN tar zxf jellyfish-2.2.10.tar.gz && rm -f jellyfish-2.2.10.tar.gz
 RUN cd jellyfish-2.2.10 && ./configure --enable-python-binding && make && make install
 
 RUN mkdir -p /environments/py3
@@ -17,7 +17,12 @@ RUN bash -c "source /environments/py3/bin/activate && python -c \"import sys; pr
 RUN bash -c "source /environments/py3/bin/activate && export PKG_CONFIG_PATH=/jellyfish-2.2.10 && cd /jellyfish-2.2.10/swig/python && python setup.py build && python setup.py install"
 
 RUN bash -c "python -c \"import sys; print(sys.version)\" && python -m pip install -r /code/requirements.txt"
-RUN export PKG_CONFIG_PATH=/jellyfish-2.2.10 && cd /jellyfish-2.2.10/swig/python && python setup.py build && python setup.py install
+RUN export PKG_CONFIG_PATH=/jellyfish-2.2.10 && \
+    cd /jellyfish-2.2.10/swig/python && \
+    python setup.py build && \
+    python setup.py install
+
+RUN rm -rf /jellyfish-2.2.10
 
 #RUN bash -c "pypy3 -c \"import sys; print(sys.version)\" && pypy3 -m pip install -r /code/requirements.txt"
 #RUN export PKG_CONFIG_PATH=/jellyfish-2.2.10 && cd /jellyfish-2.2.10/swig/python && pypy3 setup.py build && pypy3 setup.py install
