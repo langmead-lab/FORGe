@@ -16,7 +16,18 @@ ${INTERP} src/rank.py \
     --output popcov.txt \
     $*
 
-echo "*** HYBRID ***"
+echo "*** HYBRID w/ phasing ***"
+${INTERP} src/rank.py \
+    --method hybrid \
+    --reference test/sm.fa \
+    --vars test/sm.1ksnp \
+    --window-size 40 \
+    --prune 5 \
+    --output hybrid-haplo.txt \
+    --phasing test/sm.phasing \
+    $*
+
+echo "*** HYBRID w/o phasing ***"
 ${INTERP} src/rank.py \
     --method hybrid \
     --reference test/sm.fa \
