@@ -1,4 +1,4 @@
-#! /usr/bin/env python2.7
+#!/usr/bin/env python
 
 class Variant:
     def __init__(self, name, chrom, pos, orig, alts, probs):

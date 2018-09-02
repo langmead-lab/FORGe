@@ -1,4 +1,4 @@
-#! /usr/bin/env python2.7
+#!/usr/bin/env python
 
 '''
 Rank a set of variants for inclusion in a graph genome, from highest to lowest priority
@@ -6,11 +6,8 @@ Rank a set of variants for inclusion in a graph genome, from highest to lowest p
 
 import sys
 import argparse
-import jellyfish
-import io
-import variant
+import iohelp
 from util import *
-import time
 
 VERSION = '0.0.1'
 
@@ -26,8 +23,7 @@ class VarRanker:
         self.r = r
 
         self.phasing = phasing
-        if phasing:
-            self.hap_parser = io.HaplotypeParser(phasing)
+        self.hap_parser = iohelp.HaplotypeParser(phasing) if phasing else None
 
         self.max_v_in_window = max_v
 
@@ -38,6 +34,7 @@ class VarRanker:
         self.wgt_added = None
 
         self.curr_vars = None
+        self.freqs = {}
 
     def avg_read_prob(self):
         #self.wgt_ref = 0.778096
@@ -145,27 +142,32 @@ class VarRanker:
         print('Avg probability of added reads:   %f' % self.wgt_added)
 
     def count_kmers_ref(self):
+        import dna_jellyfish
         if self.h_ref:
             return
 
         # Create new Jellyfish counter and count all kmers in reference genome
-        jellyfish.MerDNA.k(self.r)
-        self.h_ref = jellyfish.HashCounter(1024, 5)
+        dna_jellyfish.MerDNA.k(self.r)
+        self.h_ref = dna_jellyfish.HashCounter(1024, 5)
 
         for chrom in self.genome.values():
-            mers = jellyfish.string_canonicals(chrom)
+            assert chrom is not None
+            mers = dna_jellyfish.string_canonicals(chrom)
+            assert mers is not None
             for m in mers:
                 self.h_ref.add(m, 1)
 
     def count_kmers_added(self):
+        import dna_jellyfish
+
         if self.h_added:
             return
 
         total = 0
         total_r = 0
 
-        jellyfish.MerDNA.k(self.r)
-        self.h_added = jellyfish.HashCounter(1024, 5)
+        dna_jellyfish.MerDNA.k(self.r)
+        self.h_added = dna_jellyfish.HashCounter(1024, 5)
 
         for i in range(self.num_v):
             chrom = self.variants[i].chrom
@@ -186,7 +188,7 @@ class VarRanker:
             pseudocontig = it.next()
             while pseudocontig:
                 # Add to jellyfish
-                mers = jellyfish.string_canonicals(pseudocontig)
+                mers = dna_jellyfish.string_canonicals(pseudocontig)
                 for m in mers:
                     self.h_added.add(m, 1)
 
@@ -205,6 +207,7 @@ class VarRanker:
         '''
 
         if not self.curr_vars or not (self.curr_vars == var_ids):
+            assert len(var_ids) > 0
             self.curr_vars = var_ids
             counts = [variants[v].num_alts for v in var_ids]
             num_v = len(var_ids)
@@ -217,17 +220,18 @@ class VarRanker:
                 num_vecs = 1
                 for c in counts:
                     num_vecs *= (c+1)
-                freqs = [0] * num_vecs
-                vec = [0] * num_v
-                while vec:
+                vtmp = [0] * num_v
+                done = False
+                while not done:
                     p = 1
                     for i in range(num_v):
-                        if vec[i]:
-                            p *= variants[var_ids[i]].probs[vec[i]-1]
+                        if vtmp[i]:
+                            p *= variants[var_ids[i]].probs[vtmp[i]-1]
                         else:
                             p *= (1 - sum(variants[var_ids[i]].probs))
-                    self.freqs[vec_to_id(vec, counts)] = p
-                    vec = get_next_vector(num_v, counts, vec)
+                    self.freqs[vec_to_id(vtmp, counts)] = p
+                    vtmp = get_next_vector(num_v, counts, vtmp)
+                    done = vtmp is None
 
         f = self.freqs[vec_to_id(vec, self.counts)]
         return f
@@ -254,7 +258,7 @@ class VarRanker:
             for line in f:
                 row = [int(a) for a in line.rstrip().split('\t')]
                 pcs.append((row[0], row[1:]))
-        io.write_pcs(self.variants, pcs, out_prefix)
+        iohelp.write_pcs(self.variants, pcs, out_prefix)
         exit()
 
         if not self.phasing:
@@ -315,7 +319,7 @@ class VarRanker:
             for pc in pcs:
                 f.write(str(pc[0]) + '\t' + '\t'.join([str(a) for a in pc[1]]) + '\n')
 
-        io.write_pcs(self.variants, pcs, out_prefix)
+        iohelp.write_pcs(self.variants, pcs, out_prefix)
 
     def rank_pcs(self, out_prefix, pcts):
         if not self.hap_parser:
@@ -378,7 +382,7 @@ class VarRanker:
                     if vec[k] > 0:
                         used_vars[i+k][vec[k]-1] = 1
 
-            io.write_pcs(self.variants, used_vars, sorted([(p[1],p[2]) for p in pc_wgts[:curr_n]]), out_prefix)
+            iohelp.write_pcs(self.variants, used_vars, sorted([(p[1],p[2]) for p in pc_wgts[:curr_n]]), out_prefix)
 
             last_n = curr_n
 
@@ -474,6 +478,8 @@ class VarRanker:
         return ordered, ordered_blowup
 
     def compute_hybrid(self, first_var, var_wgts):
+        import dna_jellyfish
+
         r = self.r
         chrom = self.variants[first_var].chrom
         pos = self.variants[first_var].pos
@@ -503,7 +509,7 @@ class VarRanker:
 
             p = self.prob_read(self.variants, ids, vec)
             for i in range(len(pseudocontig) - self.r + 1):
-                mer = jellyfish.MerDNA(pseudocontig[i:i+r])
+                mer = dna_jellyfish.MerDNA(pseudocontig[i:i+r])
                 mer.canonicalize()
                 c_linear = self.h_ref[mer]
                 if not c_linear:
@@ -668,9 +674,9 @@ def go(args):
     else:
         max_v = r
 
-    genome = io.read_genome(args.reference, args.chrom)
+    genome = iohelp.read_genome(args.reference, args.chrom)
 
-    vars = io.parse_1ksnp(args.vars)
+    vars = iohelp.parse_1ksnp(args.vars)
 
     ranker = VarRanker(genome, vars, r, args.phasing, max_v)
     if args.pseudocontigs:
