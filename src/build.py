@@ -1,4 +1,4 @@
-#! /usr/bin/env python2.7
+#!/usr/bin/env python
 
 '''
 Build a graph genome from a linear reference genome and set of variants
@@ -7,7 +7,7 @@ Build a graph genome from a linear reference genome and set of variants
 import sys
 import argparse
 
-import io
+import iohelp
 import variant
 from util import *
 
@@ -21,7 +21,7 @@ class Builder:
         self.r = r
 
     def write_hisat(self, filename):
-        io.write_vars(filename)
+        iohelp.write_vars(filename)
 
     def write_erg(self, filename):
         print('Writing ERG')
@@ -76,8 +76,8 @@ def go(args):
     else:
         r = 35
 
-    genome = io.read_genome(args.reference, None)
-    variants = io.parse_1ksnp(args.vars)
+    genome = iohelp.read_genome(args.reference, None)
+    variants = iohelp.parse_1ksnp(args.vars)
 
     if args.sorted:
         targets = top_vars(variants, args.sorted, args.pct)
