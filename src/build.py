@@ -21,9 +21,15 @@ class Builder:
         self.r = r
 
     def write_hisat(self, filename):
+        '''
+        Write variants in HISAT2 format for graph genome
+        '''
         iohelp.write_vars(filename)
 
     def write_erg(self, filename):
+        '''
+        Write graph genome in flattened ERG format from Satya et al.
+        '''
         print('Writing ERG')
         print(self.num_v)
         print(self.r)
@@ -52,6 +58,13 @@ class Builder:
         print('Done')
 
 def top_vars(variants, ordered, pct):
+    '''
+    Return the set of top variants, according to some ordering
+    
+    variants: List of variants
+    ordered: File containing sorted variants, labeled by position
+    pct: Percentage of variants to return
+    '''
     with open(ordered, 'r') as f:
         ordered_vars = [(v.split(',')[0],int(v.split(',')[1])) for v in f.readline().split('\t')]
     num_targets = int(len(ordered_vars) * pct / 100.0)
