@@ -37,6 +37,9 @@ class VarRanker:
         self.freqs = {}
 
     def avg_read_prob(self):
+        '''
+        Compute the average population probability for reads in the reference genome and added pseudocontigs
+        '''
         #self.wgt_ref = 0.778096
         #self.wgt_added = 0.002113
 
@@ -142,6 +145,9 @@ class VarRanker:
         print('Avg probability of added reads:   %f' % self.wgt_added)
 
     def count_kmers_ref(self):
+        '''
+        Count kmers in the linear reference genome
+        '''
         import dna_jellyfish
         if self.h_ref:
             return
@@ -158,6 +164,9 @@ class VarRanker:
                 self.h_ref.add(m, 1)
 
     def count_kmers_added(self):
+        '''
+        Count kmers in added pseudocontigs
+        '''
         import dna_jellyfish
 
         if self.h_added:
@@ -204,6 +213,10 @@ class VarRanker:
         '''
             Probability that a read contains the allele vector vec
             Simultaneously computes probabilities for all haplotypes of the given variants to save time
+            
+            variants: List of variants
+            var_ids: List containing 1s and 0s of same length as variants, indicating with 1s which variants to process
+            vec: Allele vector denoted by an integer for each variant. 0=reference allele, 1=first alternate allele, etc.
         '''
 
         if not self.curr_vars or not (self.curr_vars == var_ids):
@@ -240,6 +253,9 @@ class VarRanker:
         '''
             Probability that a read is from the reference genome, plus-one smoothed
             Faster than prob_read() when other haplotype probs are unneeded
+                        
+            variants: List of variants
+            var_ids: List containing 1s and 0s of same length as variants, indicating with 1s which variants to process
         '''
 
         if self.hap_parser:
@@ -405,6 +421,11 @@ class VarRanker:
                 f.write('\t'.join([self.variants[i].chrom + ',' + str(self.variants[i].pos+1) for i in ordered_blowup]))
 
     def rank_hybrid(self, threshold=0.5):
+        '''
+        Rank variants using the hybrid ranking method.
+        
+        threshold: Blowup penalty for neighboring variants, between 0 and 1. A smaller value is a stricter penalty
+        '''
 
         print('Counting kmers in ref')
         #time1 = time.time()
@@ -541,6 +562,13 @@ class VarRanker:
             pseudocontig = it.next()
 
     def rank_pop_cov(self, with_blowup=False, threshold=0.5):
+        '''
+        Rank variants using the hybrid ranking method.
+        
+        with_blowup: If true, add blowup penalty for neighboring variants
+        threshold: Blowup penalty for neighboring variants, between 0 and 1. A smaller value is a stricter penalty
+        '''
+        
         if with_blowup:
             upper_tier = []
             lower_tier = []
@@ -571,6 +599,7 @@ class VarRanker:
 
     def rank_dynamic_blowup(self, upper_tier, lower_tier, penalty=0.5):
         '''
+        Adds blowup penalty for neighboring variants.
         Variants in tiers should be tuples, each of the form (weight, # neighbors, index in self.variants) 
         penalty: Weight multiplier for each variant every time a nearby variant is added to the graph
         '''
