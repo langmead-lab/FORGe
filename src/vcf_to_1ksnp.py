@@ -20,6 +20,7 @@ def read_genome(filename):
                 if c:
                     G[chrom] = c
                 chrom = line.split(' ')[0][1:]
+                chrom = chrom.rstrip()
                 c = ''
                 continue
 
