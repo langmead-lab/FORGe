@@ -92,18 +92,18 @@ def write_vars(variants, locs, outfile):
     with open(variants, 'r') as f:
         for line in f:
             row = line.rstrip().split('\t')
-            loc = int(row[1])
+            # Convert location from 1-indexed to 0-indexed
+            loc = int(row[1])-1
 
-            while curr_id < num_target and loc > locs[curr_id]:
+            while curr_id < num_target and loc > locs[curr_id].pos:
                 curr_id += 1
                 num_alts = 0
 
             if curr_id == num_target:
                 break
 
-            if loc == locs[curr_id]:
-                # Convert location from 1-indexed to 0-indexed
-                f_out.write(row[7] + '.' + str(num_alts) + '\tsingle\t' + row[0] + '\t' + str(loc-1) + '\t' + row[3] + '\n')
+            if loc == locs[curr_id].pos:
+                f_out.write(row[7] + '.' + str(num_alts) + '\tsingle\t' + row[0] + '\t' + str(loc) + '\t' + row[3] + '\n')
                 if not loc == last_loc:
                     unique_count += 1
                 last_loc = loc
