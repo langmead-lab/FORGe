@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#! /usr/bin/env python2.7
 
 __author__ = 'jacobpritt'
 
@@ -91,8 +91,9 @@ def process_vcf(filename):
 
 
 
-def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None, indiv_hap=None):
+def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None, indiv_hap=None, indels=False):
     filters = ingroup or outgroup
+
     S = []
 
     print_filtered = False
@@ -146,7 +147,7 @@ def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None, indiv_hap
             else:
                 row = line.rstrip().split('\t')
                 type = get_mutation_type(row[7])
-                if type == 'SNP':
+                if type == 'SNP' or (indels and type == 'INDEL'):
                     chrom = row[0]
                     name = row[2]
                     loc = int(row[1])
@@ -157,9 +158,9 @@ def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None, indiv_hap
                         continue
 
                     orig = row[3]
-                    if not len(orig) == 1:
-                        print('Error! Row:')
-                        print(row[:5])
+                    #if not len(orig) == 1:
+                    #    print('Error! Row:')
+                    #    print(row[:5])
                     alts = row[4].split(',')
 
                     # number of times the alternate allele appears
@@ -176,13 +177,15 @@ def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None, indiv_hap
                             v1 = int(c[0])
                             if v1 > 0:
                                 counts[v1-1] += 1
-                            v2 = int(c[2])
-                            if v2 > 0:
-                                counts[v2-1] += 1
+                            if len(c) > 1:
+                              v2 = int(c[2])
+                              if v2 > 0:
+                                  counts[v2-1] += 1
 
                             if individuals:
                                 alleles1.append(str(v1))
-                                alleles1.append(str(v2))
+                                if len(c) > 1:
+                                  alleles1.append(str(v2))
                                 #alleles2.append(str(v2))
                     else:
                         total = len(cols) * 2
@@ -191,14 +194,15 @@ def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None, indiv_hap
                             v1 = int(row[c][0])
                             if v1 > 0:
                                 counts[v1-1] += 1
-                            v2 = int(row[c][2])
-                            if v2 > 0:
+                            if len(row[c]) > 1:
+                              v2 = int(row[c][2])
+                              if v2 > 0:
                                 counts[v2-1] += 1
 
                             if individuals:
                                 alleles1.append(str(v1))
-                                alleles1.append(str(v2))
-                                #alleles2.append(str(v2))
+                                if len(row[c]) > 1:
+                                  alleles1.append(str(v2))
 
                     if indiv_col:
                         alleleA = int(row[indiv_col][0])
@@ -240,6 +244,7 @@ def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None, indiv_hap
         f_hapA.close()
         f_hapB.close()
 
+    #print(S)
     for i in range(len(S)):
         counts = S[i][2]
         total = float(S[i][3])
@@ -247,6 +252,8 @@ def parse_vcf(filename, individuals=None, ingroup=None, outgroup=None, indiv_hap
         for j in range(len(counts)):
             probs[j] = float(counts[j]) / total
         S[i] = (S[i][0], S[i][1], probs, S[i][4], S[i][5], S[i][6])
+    #print('')
+    #print(S)
 
     return S
 
@@ -265,7 +272,8 @@ def write_1ksnp(S, G, filename):
                     count_dup2 += 1
 
                 # TODO: Find out what '99' column is
-                row = [snp[3], str(snp[0]), G[snp[3]][snp[0]-1], snp[1][i], str(snp[2][i]), '99', str(len(snp[1])), snp[4]]
+                #row = [snp[3], str(snp[0]), G[snp[3]][snp[0]-1], snp[1][i], str(snp[2][i]), '99', str(len(snp[1])), snp[4]]
+                row = [snp[3], str(snp[0]), snp[5], snp[1][i], str(snp[2][i]), '99', str(len(snp[1])), snp[4]]
                 f.write('\t'.join(row) + '\n')
 
     print('0-indexed: %d / %d' % (count_dup0, len(S)))
@@ -291,7 +299,7 @@ def vcf_to_1ksnp(args):
     if args.outgroup:
         outgroup = read_filters(args.outgroup)
 
-    S = parse_vcf(args.vcf, args.individuals, ingroup, outgroup, args.indiv_hap)
+    S = parse_vcf(args.vcf, args.individuals, ingroup, outgroup, args.indiv_hap, args.include_indels)
     print('Found %d SNPs' % len(S))
 
     write_1ksnp(S, G, args.out)
@@ -309,6 +317,7 @@ if __name__ == '__main__':
     parser.add_argument("--out", type=str, required=True, help="Path to output file")
     parser.add_argument("--individuals", type=str, help="If present, write alleles for each individual to this file")
     parser.add_argument("--indiv-hap", type=str, help="Name of individual for which to write haplotype SNPs to file")
+    parser.add_argument("--include-indels", action="store_true", help="Process both SNPs and INDELs")
 
     args = parser.parse_args(sys.argv[1:])
 
