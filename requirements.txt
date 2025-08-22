@@ -1,2 +1,2 @@
 pytest==3.6.2
-future==0.16.0
+future==1.0.0
